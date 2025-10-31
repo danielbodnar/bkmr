@@ -44,6 +44,9 @@ fn main() {
     if cli.openai {
         debug!("OpenAI embeddings requested via CLI flag");
     }
+    if cli.voyageai {
+        debug!("Voyage AI embeddings requested via CLI flag");
+    }
 
     // Handle all database-independent operations first
     if let Some(result) = handle_database_independent_operations(cli.clone(), &settings) {
@@ -55,7 +58,7 @@ fn main() {
     }
 
     // Only create ServiceContainer for database-dependent operations
-    let service_container = match ServiceContainer::new(&settings, cli.openai) {
+    let service_container = match ServiceContainer::new(&settings, cli.openai, cli.voyageai) {
         Ok(container) => container,
         Err(e) => {
             eprintln!("{}: {}", "Failed to create service container".red(), e);
