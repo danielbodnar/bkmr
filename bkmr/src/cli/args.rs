@@ -126,7 +126,7 @@ pub enum Commands {
         )]
         shell_stubs: bool,
     },
-    /// Semantic Search with OpenAI
+    /// Semantic Search
     SemSearch {
         /// Input for similarity search (search terms)
         query: String,

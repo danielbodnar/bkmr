@@ -91,7 +91,7 @@ mod tests {
         let _ = init_test_env();
         if env::var("VOYAGE_API_KEY").is_err() {
             // exit early if no API key is set
-            eprintln!("Voyage API_KEY environment variable not set");
+            eprintln!("VOYAGE_API_KEY environment variable not set");
             return;
         }
 
@@ -105,12 +105,7 @@ mod tests {
     #[test]
     fn given_missing_api_key_when_create_embedding_then_returns_error() {
         // Temporarily unset the API key if it exists
-        let key_exists = env::var("VOYAGE_API_KEY").is_ok();
-        let api_key_backup = if key_exists {
-            Some(env::var("VOYAGE_API_KEY").unwrap())
-        } else {
-            None
-        };
+        let api_key_backup = env::var("VOYAGE_API_KEY").ok();
 
         env::remove_var("VOYAGE_API_KEY");
 
