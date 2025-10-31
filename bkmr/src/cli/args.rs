@@ -132,7 +132,7 @@ pub enum Commands {
         )]
         stdout: bool,
     },
-    /// Semantic Search with OpenAI
+    /// Semantic Search
     SemSearch {
         /// Input for similarity search (search terms)
         query: String,
