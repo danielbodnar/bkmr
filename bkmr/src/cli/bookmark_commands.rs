@@ -18,7 +18,7 @@ use crate::domain::repositories::repository::BookmarkRepository;
 use crate::domain::search::SemanticSearch;
 use crate::domain::system_tag::SystemTag;
 use crate::domain::tag::Tag;
-use crate::infrastructure::embeddings::DummyEmbedding;
+use crate::infrastructure::embeddings::{DummyEmbedding, OpenAiEmbedding, VoyageAiEmbedding};
 use crate::infrastructure::json::{write_bookmarks_as_json, JsonBookmarkView};
 use crate::infrastructure::repositories::sqlite::migration;
 use crate::infrastructure::repositories::sqlite::repository::{
@@ -934,8 +934,16 @@ pub fn info(cli: Cli, services: &ServiceContainer, settings: &Settings) -> CliRe
             == std::any::TypeId::of::<DummyEmbedding>()
         {
             "DummyEmbedding (embeddings disabled)"
-        } else {
+        } else if services.embedder.as_any().type_id()
+            == std::any::TypeId::of::<OpenAiEmbedding>()
+        {
             "OpenAiEmbedding (embeddings enabled)"
+        } else if services.embedder.as_any().type_id()
+            == std::any::TypeId::of::<VoyageAiEmbedding>()
+        {
+            "VoyageAiEmbedding (embeddings enabled)"
+        } else {
+            "Unknown embedder"
         };
         println!("  Embedder: {}", embedder_type);
 
