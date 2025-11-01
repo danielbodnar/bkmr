@@ -9,16 +9,40 @@ use tracing::{debug, instrument};
 /// 
 /// Supports any OpenAI-compatible embeddings provider (OpenAI, Ollama, HuggingFace, Voyage AI, etc.)
 /// 
-/// Configuration via environment variables (for backward compatibility, all use OPENAI_* prefix):
-/// - `OPENAI_API_KEY`: API key for authentication (required)
-/// - `OPENAI_API_URL`: Base URL for the API endpoint (optional, defaults to "https://api.openai.com")
-/// - `OPENAI_MODEL`: Model name to use for embeddings (optional, defaults to "text-embedding-ada-002")
+/// ## Configuration
 /// 
-/// Examples:
-/// - OpenAI: Use defaults
-/// - Ollama: Set OPENAI_API_URL="http://localhost:11434" and OPENAI_MODEL="nomic-embed-text"
-/// - HuggingFace: Set OPENAI_API_URL to HF endpoint and appropriate model
-/// - Voyage AI: Set OPENAI_API_URL and OPENAI_MODEL accordingly
+/// Environment variables (for backward compatibility, all use OPENAI_* prefix):
+/// - `OPENAI_API_KEY`: API key for authentication (required for most providers)
+/// - `OPENAI_API_BASE`: Base URL for the API endpoint (optional, defaults to "https://api.openai.com/v1")
+/// - `OPENAI_MODEL`: Model name to use for embeddings (optional, defaults to "text-embedding-3-small")
+/// 
+/// ## Supported Providers
+/// 
+/// This implementation supports any provider that follows the OpenAI embeddings API specification:
+/// - **OpenAI**: Use defaults (official OpenAI API)
+/// - **Ollama**: Set OPENAI_API_BASE="http://localhost:11434" and OPENAI_MODEL="nomic-embed-text"
+/// - **HuggingFace**: Set OPENAI_API_BASE to HF endpoint and appropriate model
+/// - **Voyage AI**: Set OPENAI_API_BASE and OPENAI_MODEL accordingly (uses X-Api-Key header)
+/// - **Custom**: Any OpenAI-compatible endpoint
+/// 
+/// ## Authentication
+/// 
+/// Auth headers are automatically detected based on the URL:
+/// - Voyage AI (api.voyageai.com): Uses `X-Api-Key` header
+/// - Localhost/Ollama: No authentication required
+/// - All others: Uses `Authorization: Bearer` header
+/// 
+/// ## Non-Compatible Providers
+/// 
+/// **Note**: This implementation is specifically designed for OpenAI-compatible REST APIs.
+/// Providers that use different API patterns (gRPC, different request/response formats,
+/// OAuth flows, AWS SigV4, etc.) would require a different architecture with provider-specific
+/// adapters. Examples of non-compatible providers:
+/// - Cohere (different API format)
+/// - Anthropic (different API structure)
+/// - Providers requiring OAuth or AWS SigV4
+/// - Streaming-only APIs
+/// - gRPC-based services
 #[derive(Debug, Clone)]
 pub struct OpenAiEmbedding {
     url: String,
@@ -40,17 +64,47 @@ impl OpenAiEmbedding {
     /// Create embedder from environment variables
     /// 
     /// Reads configuration from:
-    /// - OPENAI_API_URL (defaults to "https://api.openai.com")
-    /// - OPENAI_MODEL (defaults to "text-embedding-ada-002")
+    /// - OPENAI_API_BASE (defaults to "https://api.openai.com/v1")
+    /// - OPENAI_MODEL (defaults to "text-embedding-3-small")
+    /// 
+    /// Note: Also checks legacy OPENAI_API_URL for backward compatibility
     pub fn from_env() -> Self {
-        let url = env::var("OPENAI_API_URL")
-            .unwrap_or_else(|_| "https://api.openai.com".to_string());
+        // Check OPENAI_API_BASE first, then fall back to legacy OPENAI_API_URL
+        let url = env::var("OPENAI_API_BASE")
+            .or_else(|_| env::var("OPENAI_API_URL"))
+            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+        
         let model = env::var("OPENAI_MODEL")
-            .unwrap_or_else(|_| "text-embedding-ada-002".to_string());
+            .unwrap_or_else(|_| "text-embedding-3-small".to_string());
         
         debug!("OpenAI embedder configured with URL: {}, Model: {}", url, model);
         
         Self { url, model }
+    }
+    
+    /// Determine the appropriate authentication header based on the URL
+    /// 
+    /// - Voyage AI (api.voyageai.com): X-Api-Key
+    /// - Localhost/127.0.0.1: No auth
+    /// - All others: Authorization: Bearer
+    fn get_auth_header(&self, api_key: &str) -> Option<(&'static str, String)> {
+        let url_lower = self.url.to_lowercase();
+        
+        // No auth for localhost/Ollama
+        if url_lower.contains("localhost") || url_lower.contains("127.0.0.1") {
+            debug!("No authentication required for localhost");
+            return None;
+        }
+        
+        // Voyage AI uses X-Api-Key
+        if url_lower.contains("api.voyageai.com") {
+            debug!("Using X-Api-Key authentication for Voyage AI");
+            return Some(("X-Api-Key", api_key.to_string()));
+        }
+        
+        // Default: Bearer token
+        debug!("Using Bearer token authentication");
+        Some(("Authorization", format!("Bearer {}", api_key)))
     }
 }
 
@@ -59,11 +113,16 @@ impl Embedder for OpenAiEmbedding {
     fn embed(&self, text: &str) -> DomainResult<Option<Vec<f32>>> {
         debug!("OpenAI embedding request for text length: {}", text.len());
 
-        let api_key = env::var("OPENAI_API_KEY").map_err(|_| {
-            DomainError::CannotFetchMetadata(
-                "OPENAI_API_KEY environment variable not set".to_string(),
-            )
-        })?;
+        let api_key = env::var("OPENAI_API_KEY").unwrap_or_default();
+        
+        // Validate API key if authentication is required
+        if let Some(_) = self.get_auth_header(&api_key) {
+            if api_key.is_empty() {
+                return Err(DomainError::CannotFetchMetadata(
+                    "OPENAI_API_KEY environment variable not set".to_string(),
+                ));
+            }
+        }
 
         let client = reqwest::blocking::Client::new();
 
@@ -72,11 +131,17 @@ impl Embedder for OpenAiEmbedding {
             model: self.model.clone(),
         };
 
-        let response = client
-            .post(format!("{}/v1/embeddings", self.url))
-            .header("Authorization", format!("Bearer {}", api_key))
-            .json(&request)
-            .send()
+        // Build request with appropriate auth header
+        let mut request_builder = client
+            .post(format!("{}/embeddings", self.url))
+            .json(&request);
+        
+        // Add auth header if required
+        if let Some((header_name, header_value)) = self.get_auth_header(&api_key) {
+            request_builder = request_builder.header(header_name, header_value);
+        }
+        
+        let response = request_builder.send()
             .map_err(|e| {
                 DomainError::CannotFetchMetadata(format!("OpenAI API request failed: {}", e))
             })?;

@@ -45,24 +45,40 @@ impl Drop for EnvGuard {
     }
 }
 
+const TEST_VARS: &[&str] = &["OPENAI_API_BASE", "OPENAI_API_URL", "OPENAI_MODEL", "OPENAI_API_KEY"];
+
 #[test]
 fn given_no_env_vars_when_create_embedder_then_uses_openai_defaults() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_URL", "OPENAI_MODEL", "OPENAI_API_KEY"]);
+    let _guard = EnvGuard::new(TEST_VARS);
     
     let embedder = OpenAiEmbedding::default();
     
     // Verify defaults via debug output
     let debug_str = format!("{:?}", embedder);
-    assert!(debug_str.contains("https://api.openai.com"));
-    assert!(debug_str.contains("text-embedding-ada-002"));
+    assert!(debug_str.contains("https://api.openai.com/v1"));
+    assert!(debug_str.contains("text-embedding-3-small"));
 }
 
 #[test]
-fn given_custom_api_url_when_create_embedder_then_uses_custom_url() {
+fn given_custom_api_base_when_create_embedder_then_uses_custom_url() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_URL", "OPENAI_MODEL", "OPENAI_API_KEY"]);
+    let _guard = EnvGuard::new(TEST_VARS);
     
+    env::set_var("OPENAI_API_BASE", "http://localhost:11434/v1");
+    
+    let embedder = OpenAiEmbedding::default();
+    
+    let debug_str = format!("{:?}", embedder);
+    assert!(debug_str.contains("http://localhost:11434/v1"));
+}
+
+#[test]
+fn given_legacy_api_url_when_create_embedder_then_uses_custom_url() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _guard = EnvGuard::new(TEST_VARS);
+    
+    // Test backward compatibility with OPENAI_API_URL
     env::set_var("OPENAI_API_URL", "http://localhost:11434");
     
     let embedder = OpenAiEmbedding::default();
@@ -74,7 +90,7 @@ fn given_custom_api_url_when_create_embedder_then_uses_custom_url() {
 #[test]
 fn given_custom_model_when_create_embedder_then_uses_custom_model() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_URL", "OPENAI_MODEL", "OPENAI_API_KEY"]);
+    let _guard = EnvGuard::new(TEST_VARS);
     
     env::set_var("OPENAI_MODEL", "nomic-embed-text");
     
@@ -87,10 +103,10 @@ fn given_custom_model_when_create_embedder_then_uses_custom_model() {
 #[test]
 fn given_ollama_config_when_create_embedder_then_configures_for_ollama() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_URL", "OPENAI_MODEL", "OPENAI_API_KEY"]);
+    let _guard = EnvGuard::new(TEST_VARS);
     
     // Simulate Ollama configuration
-    env::set_var("OPENAI_API_URL", "http://localhost:11434");
+    env::set_var("OPENAI_API_BASE", "http://localhost:11434/v1");
     env::set_var("OPENAI_MODEL", "nomic-embed-text");
     env::set_var("OPENAI_API_KEY", "ollama");  // Ollama doesn't need real key
     
@@ -102,12 +118,29 @@ fn given_ollama_config_when_create_embedder_then_configures_for_ollama() {
 }
 
 #[test]
+fn given_voyage_ai_config_when_create_embedder_then_configures_for_voyage() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _guard = EnvGuard::new(TEST_VARS);
+    
+    // Simulate Voyage AI configuration
+    env::set_var("OPENAI_API_BASE", "https://api.voyageai.com/v1");
+    env::set_var("OPENAI_MODEL", "voyage-2");
+    env::set_var("OPENAI_API_KEY", "pa-test-key");
+    
+    let embedder = OpenAiEmbedding::default();
+    
+    let debug_str = format!("{:?}", embedder);
+    assert!(debug_str.contains("https://api.voyageai.com"));
+    assert!(debug_str.contains("voyage-2"));
+}
+
+#[test]
 fn given_custom_provider_config_when_create_embedder_then_configures_for_provider() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_URL", "OPENAI_MODEL", "OPENAI_API_KEY"]);
+    let _guard = EnvGuard::new(TEST_VARS);
     
     // Simulate custom provider configuration
-    env::set_var("OPENAI_API_URL", "https://api.custom-provider.com");
+    env::set_var("OPENAI_API_BASE", "https://api.custom-provider.com/v1");
     env::set_var("OPENAI_MODEL", "custom-embedding-model");
     env::set_var("OPENAI_API_KEY", "sk-custom-key");
     
@@ -133,21 +166,21 @@ fn given_explicit_config_when_create_embedder_then_uses_provided_values() {
 #[test]
 fn given_from_env_when_no_vars_set_then_uses_defaults() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_URL", "OPENAI_MODEL"]);
+    let _guard = EnvGuard::new(TEST_VARS);
     
     let embedder = OpenAiEmbedding::from_env();
     
     let debug_str = format!("{:?}", embedder);
-    assert!(debug_str.contains("https://api.openai.com"));
-    assert!(debug_str.contains("text-embedding-ada-002"));
+    assert!(debug_str.contains("https://api.openai.com/v1"));
+    assert!(debug_str.contains("text-embedding-3-small"));
 }
 
 #[test]
 fn given_from_env_when_vars_set_then_uses_env_values() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_URL", "OPENAI_MODEL"]);
+    let _guard = EnvGuard::new(TEST_VARS);
     
-    env::set_var("OPENAI_API_URL", "http://test.local:8080");
+    env::set_var("OPENAI_API_BASE", "http://test.local:8080/v1");
     env::set_var("OPENAI_MODEL", "test-model");
     
     let embedder = OpenAiEmbedding::from_env();
@@ -160,7 +193,10 @@ fn given_from_env_when_vars_set_then_uses_env_values() {
 #[test]
 fn given_missing_api_key_when_embed_then_returns_error() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_KEY"]);
+    let _guard = EnvGuard::new(TEST_VARS);
+    
+    // Set a non-localhost URL that requires auth
+    env::set_var("OPENAI_API_BASE", "https://api.openai.com/v1");
     
     let embedder = OpenAiEmbedding::default();
     let result = embedder.embed("test text");
@@ -171,9 +207,29 @@ fn given_missing_api_key_when_embed_then_returns_error() {
 }
 
 #[test]
+fn given_localhost_when_embed_then_no_auth_required() {
+    let _lock = ENV_LOCK.lock().unwrap();
+    let _guard = EnvGuard::new(TEST_VARS);
+    
+    // Localhost should not require API key
+    env::set_var("OPENAI_API_BASE", "http://localhost:11434/v1");
+    env::set_var("OPENAI_MODEL", "nomic-embed-text");
+    
+    let embedder = OpenAiEmbedding::default();
+    // This won't actually succeed without Ollama running, but should not fail on missing API key
+    let result = embedder.embed("test text");
+    
+    // Should fail on connection, not auth
+    if let Err(e) = result {
+        let err_msg = format!("{:?}", e);
+        assert!(!err_msg.contains("OPENAI_API_KEY"));
+    }
+}
+
+#[test]
 fn given_backward_compatibility_when_only_api_key_set_then_uses_openai_defaults() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_URL", "OPENAI_MODEL", "OPENAI_API_KEY"]);
+    let _guard = EnvGuard::new(TEST_VARS);
     
     // Only set API key, like in the old behavior
     env::set_var("OPENAI_API_KEY", "sk-test-key");
@@ -182,35 +238,35 @@ fn given_backward_compatibility_when_only_api_key_set_then_uses_openai_defaults(
     
     // Should still use OpenAI defaults for URL and model
     let debug_str = format!("{:?}", embedder);
-    assert!(debug_str.contains("https://api.openai.com"));
-    assert!(debug_str.contains("text-embedding-ada-002"));
+    assert!(debug_str.contains("https://api.openai.com/v1"));
+    assert!(debug_str.contains("text-embedding-3-small"));
 }
 
 #[test]
-fn given_partial_config_when_only_url_set_then_uses_default_model() {
+fn given_partial_config_when_only_base_set_then_uses_default_model() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_URL", "OPENAI_MODEL"]);
+    let _guard = EnvGuard::new(TEST_VARS);
     
-    env::set_var("OPENAI_API_URL", "http://localhost:11434");
+    env::set_var("OPENAI_API_BASE", "http://localhost:11434/v1");
     
     let embedder = OpenAiEmbedding::from_env();
     
     let debug_str = format!("{:?}", embedder);
     assert!(debug_str.contains("http://localhost:11434"));
-    assert!(debug_str.contains("text-embedding-ada-002")); // Default model
+    assert!(debug_str.contains("text-embedding-3-small")); // Default model
 }
 
 #[test]
 fn given_partial_config_when_only_model_set_then_uses_default_url() {
     let _lock = ENV_LOCK.lock().unwrap();
-    let _guard = EnvGuard::new(&["OPENAI_API_URL", "OPENAI_MODEL"]);
+    let _guard = EnvGuard::new(TEST_VARS);
     
     env::set_var("OPENAI_MODEL", "custom-model");
     
     let embedder = OpenAiEmbedding::from_env();
     
     let debug_str = format!("{:?}", embedder);
-    assert!(debug_str.contains("https://api.openai.com")); // Default URL
+    assert!(debug_str.contains("https://api.openai.com/v1")); // Default URL
     assert!(debug_str.contains("custom-model"));
 }
 

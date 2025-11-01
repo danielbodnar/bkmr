@@ -10,19 +10,25 @@ OpenAI provides state-of-the-art embeddings models with high accuracy.
 
 ```bash
 export OPENAI_API_KEY="sk-your-api-key"
-# Optional: Customize the model (defaults to text-embedding-ada-002)
-export OPENAI_MODEL="text-embedding-ada-002"
+# Optional: Customize base URL and model
+export OPENAI_API_BASE="https://api.openai.com/v1"  # default
+export OPENAI_MODEL="text-embedding-3-small"  # default (1536 dimensions)
 ```
 
 **Pros:**
 - High quality embeddings
 - Well-tested and reliable
-- 1536-dimensional vectors
+- Latest models optimized for cost and performance
 
 **Cons:**
 - Requires internet connection
 - API costs per request
 - Data sent to external service
+
+**Popular Models:**
+- `text-embedding-3-small` - Recommended, fast and cost-effective (1536 dimensions)
+- `text-embedding-3-large` - Higher quality (3072 dimensions)
+- `text-embedding-ada-002` - Legacy model (1536 dimensions)
 
 ### Ollama (Local)
 
@@ -36,9 +42,9 @@ ollama serve
 ollama pull nomic-embed-text
 
 # Configure bkmr
-export OPENAI_API_URL="http://localhost:11434"
+export OPENAI_API_BASE="http://localhost:11434/v1"
 export OPENAI_MODEL="nomic-embed-text"
-export OPENAI_API_KEY="ollama"  # Ollama doesn't require a real key
+# No API key needed for localhost
 ```
 
 **Pros:**
@@ -61,7 +67,7 @@ export OPENAI_API_KEY="ollama"  # Ollama doesn't require a real key
 HuggingFace provides access to thousands of open-source embedding models.
 
 ```bash
-export OPENAI_API_URL="https://api-inference.huggingface.co"
+export OPENAI_API_BASE="https://api-inference.huggingface.co/v1"
 export OPENAI_MODEL="sentence-transformers/all-MiniLM-L6-v2"
 export OPENAI_API_KEY="hf_your-api-key"
 ```
@@ -82,10 +88,10 @@ export OPENAI_API_KEY="hf_your-api-key"
 
 ### Voyage AI
 
-Voyage AI provides specialized embeddings optimized for retrieval tasks.
+Voyage AI provides specialized embeddings optimized for retrieval tasks. **Note:** Uses `X-Api-Key` authentication header (automatically detected).
 
 ```bash
-export OPENAI_API_URL="https://api.voyageai.com"
+export OPENAI_API_BASE="https://api.voyageai.com/v1"
 export OPENAI_MODEL="voyage-2"
 export OPENAI_API_KEY="pa-your-api-key"
 ```
@@ -104,7 +110,7 @@ export OPENAI_API_KEY="pa-your-api-key"
 Any service that implements the OpenAI embeddings API can be used.
 
 ```bash
-export OPENAI_API_URL="https://your-custom-endpoint.com"
+export OPENAI_API_BASE="https://your-custom-endpoint.com/v1"
 export OPENAI_MODEL="your-embedding-model"
 export OPENAI_API_KEY="your-api-key"
 ```
@@ -115,9 +121,17 @@ export OPENAI_API_KEY="your-api-key"
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENAI_API_KEY` | Yes | None | API key for authentication |
-| `OPENAI_API_URL` | No | `https://api.openai.com` | Base URL for the embeddings API |
-| `OPENAI_MODEL` | No | `text-embedding-ada-002` | Model name for embeddings |
+| `OPENAI_API_KEY` | Conditional | None | API key (not required for localhost) |
+| `OPENAI_API_BASE` | No | `https://api.openai.com/v1` | Base URL for the embeddings API |
+| `OPENAI_API_URL` | No | (alias for API_BASE) | Legacy alias for backward compatibility |
+| `OPENAI_MODEL` | No | `text-embedding-3-small` | Model name for embeddings |
+
+### Authentication
+
+Authentication is automatically detected based on the URL:
+- **Voyage AI** (api.voyageai.com): Uses `X-Api-Key` header
+- **Localhost** (127.0.0.1 or localhost): No authentication required
+- **All others**: Uses `Authorization: Bearer` header
 
 ### API Compatibility
 
@@ -150,7 +164,7 @@ To verify your embeddings configuration:
 ```bash
 # Set your environment variables
 export OPENAI_API_KEY="your-key"
-export OPENAI_API_URL="your-url"
+export OPENAI_API_BASE="your-url"
 export OPENAI_MODEL="your-model"
 
 # Try creating an embedding
@@ -165,13 +179,13 @@ bkmr --openai backfill
 You can easily switch between providers by changing environment variables:
 
 ```bash
-# Switch to Ollama
-export OPENAI_API_URL="http://localhost:11434"
+# Switch to Ollama (local)
+export OPENAI_API_BASE="http://localhost:11434/v1"
 export OPENAI_MODEL="nomic-embed-text"
-export OPENAI_API_KEY="ollama"
+unset OPENAI_API_KEY  # Not needed for localhost
 
 # Switch back to OpenAI
-unset OPENAI_API_URL
+unset OPENAI_API_BASE
 unset OPENAI_MODEL
 export OPENAI_API_KEY="sk-your-openai-key"
 ```
