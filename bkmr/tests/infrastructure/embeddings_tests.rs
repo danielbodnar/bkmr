@@ -7,10 +7,11 @@
 use bkmr::domain::embedding::Embedder;
 use bkmr::infrastructure::embeddings::OpenAiEmbedding;
 use std::env;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 // Global mutex to ensure environment variable tests run serially
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+// Using LazyLock to avoid potential issues with static initialization
+static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// Helper to save and restore environment variables
 struct EnvGuard {

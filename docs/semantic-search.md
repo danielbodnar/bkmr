@@ -8,7 +8,7 @@ Semantic search uses AI embeddings (vector representations of text) to capture t
 
 ## Requirements
 
-- API key set as environment variable: `OPENAI_API_KEY`
+- API key set as environment variable: `OPENAI_API_KEY` (for your configured embeddings provider)
 - The `--openai` flag when running commands that use embeddings
 
 ## Configuring Embedding Providers

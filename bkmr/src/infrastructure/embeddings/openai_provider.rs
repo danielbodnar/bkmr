@@ -108,8 +108,6 @@ impl Embedder for OpenAiEmbedding {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

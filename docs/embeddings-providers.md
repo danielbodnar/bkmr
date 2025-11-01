@@ -76,9 +76,9 @@ export OPENAI_API_KEY="hf_your-api-key"
 - Variable response times
 
 **Popular Models:**
-- `sentence-transformers/all-MiniLM-L6-v2` - Fast and efficient
-- `sentence-transformers/all-mpnet-base-v2` - Higher quality
-- `BAAI/bge-small-en-v1.5` - Optimized for retrieval
+- `sentence-transformers/all-MiniLM-L6-v2` - Fast and efficient (384 dimensions)
+- `sentence-transformers/all-mpnet-base-v2` - Higher quality (768 dimensions)
+- `BAAI/bge-small-en-v1.5` - Optimized for retrieval (384 dimensions)
 
 ### Voyage AI
 
