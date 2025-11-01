@@ -18,11 +18,11 @@ pub struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub debug: u8,
 
-    #[arg(long = "openai", help = "use OpenAI API to embed bookmarks")]
+    #[arg(
+        long = "openai",
+        help = "Enable embeddings (uses OPENAI_API_KEY, OPENAI_PROVIDER, OPENAI_API_BASE, OPENAI_MODEL env vars)"
+    )]
     pub openai: bool,
-
-    #[arg(long = "voyageai", help = "use Voyage AI API to embed bookmarks")]
-    pub voyageai: bool,
 
     #[arg(long = "no-color", help = "Disable colored output")]
     pub no_color: bool,

@@ -13,7 +13,7 @@ use crate::domain::action_resolver::{ActionResolver, SystemTagActionResolver};
 use crate::domain::embedding::Embedder;
 use crate::domain::services::clipboard::ClipboardService;
 use crate::infrastructure::clipboard::ClipboardServiceImpl;
-use crate::infrastructure::embeddings::{DummyEmbedding, OpenAiEmbedding, VoyageAiEmbedding};
+use crate::infrastructure::embeddings::{DummyEmbedding, OpenAiCompatibleEmbedding};
 use crate::infrastructure::interpolation::minijinja_engine::{MiniJinjaEngine, SafeShellExecutor};
 use crate::infrastructure::repositories::file_import_repository::FileImportRepository;
 use crate::infrastructure::repositories::sqlite::repository::SqliteBookmarkRepository;
@@ -39,10 +39,10 @@ pub struct ServiceContainer {
 
 impl ServiceContainer {
     /// Create all services with explicit dependency injection
-    pub fn new(config: &Settings, openai: bool, voyageai: bool) -> ApplicationResult<Self> {
+    pub fn new(config: &Settings, use_embeddings: bool) -> ApplicationResult<Self> {
         // Base infrastructure
         let bookmark_repository = Self::create_repository(&config.db_url)?;
-        let embedder = Self::create_embedder(openai, voyageai)?;
+        let embedder = Self::create_embedder(use_embeddings)?;
         let clipboard_service = Arc::new(ClipboardServiceImpl::new());
         let interpolation_service = Self::create_interpolation_service();
         let template_service = Self::create_template_service();
@@ -100,17 +100,15 @@ impl ServiceContainer {
         Ok(Arc::new(repository))
     }
     
-    fn create_embedder(openai: bool, voyageai: bool) -> ApplicationResult<Arc<dyn Embedder>> {
-        if openai && voyageai {
-            return Err(crate::application::error::ApplicationError::Other(
-                "Cannot use both --openai and --voyageai flags simultaneously".to_string()
-            ));
-        }
-        
-        if openai {
-            Ok(Arc::new(OpenAiEmbedding::default()))
-        } else if voyageai {
-            Ok(Arc::new(VoyageAiEmbedding::default()))
+    fn create_embedder(use_embeddings: bool) -> ApplicationResult<Arc<dyn Embedder>> {
+        if use_embeddings {
+            // Use the new unified OpenAI-compatible provider
+            // Configuration is done via environment variables:
+            // - OPENAI_API_KEY: required
+            // - OPENAI_PROVIDER: optional (openai, voyageai, ollama, etc.)
+            // - OPENAI_API_BASE: optional override for API endpoint
+            // - OPENAI_MODEL: optional override for model name
+            Ok(Arc::new(OpenAiCompatibleEmbedding::from_env()))
         } else {
             Ok(Arc::new(DummyEmbedding))
         }
