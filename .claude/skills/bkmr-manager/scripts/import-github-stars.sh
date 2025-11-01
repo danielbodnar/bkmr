@@ -56,7 +56,8 @@ EOF
 }
 
 # Parse arguments
-shift || usage
+[[ -z "$GITHUB_USER" ]] && usage
+shift
 while [[ $# -gt 0 ]]; do
     case $1 in
         --year)
