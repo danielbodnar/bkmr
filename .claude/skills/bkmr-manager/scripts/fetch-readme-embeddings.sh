@@ -193,7 +193,7 @@ echo "$github_bookmarks" | jq -c '.[]' | while read -r bookmark; do
     # Fetch README content
     echo "  Fetching README..."
     readme_content=$(gh api "repos/$owner/$repo/readme" \
-        --jq '.content' 2>/dev/null | base64 -d 2>/dev/null) || {
+        --jq '.content' 2>/dev/null | base64 --decode 2>/dev/null) || {
         echo -e "${YELLOW}  No README found or access denied${NC}"
         ((failed++))
         continue
