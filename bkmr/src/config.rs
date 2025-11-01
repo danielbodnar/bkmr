@@ -77,6 +77,34 @@ impl Default for ShellOpts {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EmbeddingsOpts {
+    /// Base URL for the embeddings API endpoint
+    #[serde(default = "default_embeddings_api_base")]
+    pub api_base: String,
+    
+    /// Model name to use for embeddings
+    #[serde(default = "default_embeddings_model")]
+    pub model: String,
+}
+
+fn default_embeddings_api_base() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+
+fn default_embeddings_model() -> String {
+    "text-embedding-3-small".to_string()
+}
+
+impl Default for EmbeddingsOpts {
+    fn default() -> Self {
+        Self {
+            api_base: default_embeddings_api_base(),
+            model: default_embeddings_model(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Settings {
     /// Path to the SQLite database file
     #[serde(default = "default_db_path")]
@@ -93,6 +121,10 @@ pub struct Settings {
     /// Base paths for file imports (e.g., SCRIPTS_HOME="$HOME/scripts")
     #[serde(default)]
     pub base_paths: HashMap<String, String>,
+
+    /// Options for embeddings configuration
+    #[serde(default)]
+    pub embeddings_opts: EmbeddingsOpts,
 
     /// Tracks configuration source (not serialized)
     #[serde(skip)]
@@ -143,6 +175,7 @@ impl Default for Settings {
             fzf_opts: FzfOpts::default(),
             shell_opts: ShellOpts::default(),
             base_paths: HashMap::new(),
+            embeddings_opts: EmbeddingsOpts::default(),
             config_source: ConfigSource::Default,
         }
     }
@@ -290,6 +323,22 @@ fn apply_env_overrides(settings: &mut Settings) {
             shell_interactive
         );
         settings.shell_opts.interactive = shell_interactive.to_lowercase() == "true";
+        used_env_vars = true;
+    }
+
+    // Embeddings configuration from environment variables
+    // Support both OPENAI_API_BASE and legacy OPENAI_API_URL for backward compatibility
+    if let Ok(api_base) = std::env::var("OPENAI_API_BASE")
+        .or_else(|_| std::env::var("OPENAI_API_URL")) 
+    {
+        trace!("Using OPENAI_API_BASE/URL from environment: {}", api_base);
+        settings.embeddings_opts.api_base = api_base;
+        used_env_vars = true;
+    }
+
+    if let Ok(model) = std::env::var("OPENAI_MODEL") {
+        trace!("Using OPENAI_MODEL from environment: {}", model);
+        settings.embeddings_opts.model = model;
         used_env_vars = true;
     }
 
@@ -561,6 +610,7 @@ mod tests {
             },
             shell_opts: ShellOpts { interactive: true },
             base_paths: HashMap::new(),
+            embeddings_opts: EmbeddingsOpts::default(),
             config_source: ConfigSource::ConfigFile,
         };
 

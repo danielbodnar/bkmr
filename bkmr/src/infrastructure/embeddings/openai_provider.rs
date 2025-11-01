@@ -61,13 +61,32 @@ impl OpenAiEmbedding {
         Self { url, model }
     }
 
-    /// Create embedder from environment variables
+    /// Create embedder from configuration
+    /// 
+    /// Configuration is read from Settings which loads from:
+    /// 1. Config file (~/.config/bkmr/config.toml)
+    /// 2. Environment variables (OPENAI_API_BASE, OPENAI_MODEL) - these override config file
+    /// 3. Defaults if neither is set
+    /// 
+    /// This ensures backward compatibility while supporting production-ready config files.
+    pub fn from_config(api_base: &str, model: &str) -> Self {
+        debug!("OpenAI embedder configured with URL: {}, Model: {}", api_base, model);
+        Self { 
+            url: api_base.to_string(), 
+            model: model.to_string() 
+        }
+    }
+
+    /// Create embedder from environment variables (legacy method for backward compatibility)
     /// 
     /// Reads configuration from:
     /// - OPENAI_API_BASE (defaults to "https://api.openai.com/v1")
     /// - OPENAI_MODEL (defaults to "text-embedding-3-small")
     /// 
     /// Note: Also checks legacy OPENAI_API_URL for backward compatibility
+    /// 
+    /// **Deprecated**: Use `from_config` with Settings instead for production deployments.
+    /// This method is kept for backward compatibility with existing code that doesn't use Settings.
     pub fn from_env() -> Self {
         // Check OPENAI_API_BASE first, then fall back to legacy OPENAI_API_URL
         let url = env::var("OPENAI_API_BASE")

@@ -1,6 +1,44 @@
 # Embeddings Provider Configuration
 
-`bkmr` supports multiple embeddings providers through a vendor-agnostic configuration system. While the environment variables use the `OPENAI_` prefix for backward compatibility, you can use any OpenAI-compatible embeddings provider.
+`bkmr` supports multiple embeddings providers through a vendor-agnostic configuration system using **both configuration files and environment variables**. While the environment variables use the `OPENAI_` prefix for backward compatibility, you can use any OpenAI-compatible embeddings provider.
+
+## Configuration Methods
+
+### Method 1: Configuration File (Production-Ready)
+
+For production deployments, use the configuration file at `~/.config/bkmr/config.toml`:
+
+```toml
+[embeddings_opts]
+api_base = "https://api.openai.com/v1"
+model = "text-embedding-3-small"
+```
+
+**Benefits:**
+- Persistent across sessions
+- Version-controllable
+- No need to set environment variables repeatedly
+- Production-ready
+
+Generate the default config:
+```bash
+bkmr --generate-config > ~/.config/bkmr/config.toml
+```
+
+### Method 2: Environment Variables (Quick Testing)
+
+Environment variables override config file settings, useful for testing or temporary changes:
+
+```bash
+export OPENAI_API_BASE="http://localhost:11434/v1"
+export OPENAI_MODEL="nomic-embed-text"
+```
+
+### Configuration Priority
+
+1. Environment variables (`OPENAI_API_BASE`, `OPENAI_MODEL`) - highest priority
+2. Configuration file (`~/.config/bkmr/config.toml`)
+3. Defaults if neither is set
 
 ## Supported Providers
 

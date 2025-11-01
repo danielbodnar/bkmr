@@ -13,7 +13,33 @@ Semantic search uses AI embeddings (vector representations of text) to capture t
 
 ## Configuring Embedding Providers
 
-`bkmr` supports any OpenAI-compatible embeddings provider through environment variables. By default, it uses OpenAI, but you can easily switch to other providers:
+`bkmr` supports any OpenAI-compatible embeddings provider through both **configuration files** and **environment variables**. Configuration files provide production-ready, persistent settings, while environment variables allow for quick overrides and testing.
+
+### Configuration Priority
+
+Settings are loaded in this order (later sources override earlier ones):
+1. **Config file** (`~/.config/bkmr/config.toml`)
+2. **Environment variables** (`OPENAI_API_BASE`, `OPENAI_MODEL`) - override config file
+3. **Defaults** if neither is set
+
+### Using Configuration Files (Recommended)
+
+Add to your `~/.config/bkmr/config.toml`:
+
+```toml
+[embeddings_opts]
+api_base = "https://api.openai.com/v1"
+model = "text-embedding-3-small"
+```
+
+Generate a default config file:
+```bash
+bkmr --generate-config > ~/.config/bkmr/config.toml
+```
+
+### Using Environment Variables (Quick Testing)
+
+Environment variables override config file settings. By default, it uses OpenAI, but you can easily switch to other providers:
 
 ### OpenAI (Default)
 ```bash
