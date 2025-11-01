@@ -39,13 +39,10 @@ fn main() {
             Settings::default()
         });
     
-    // Note: OpenAI override from CLI flag will be handled in service container
-    // when the embedder selection is properly implemented
+    // Note: Embeddings configuration is done via environment variables
+    // OPENAI_API_KEY (required), OPENAI_PROVIDER, OPENAI_API_BASE, OPENAI_MODEL
     if cli.openai {
-        debug!("OpenAI embeddings requested via CLI flag");
-    }
-    if cli.voyageai {
-        debug!("Voyage AI embeddings requested via CLI flag");
+        debug!("Embeddings enabled via --openai flag");
     }
 
     // Handle all database-independent operations first
@@ -58,7 +55,7 @@ fn main() {
     }
 
     // Only create ServiceContainer for database-dependent operations
-    let service_container = match ServiceContainer::new(&settings, cli.openai, cli.voyageai) {
+    let service_container = match ServiceContainer::new(&settings, cli.openai) {
         Ok(container) => container,
         Err(e) => {
             eprintln!("{}: {}", "Failed to create service container".red(), e);
