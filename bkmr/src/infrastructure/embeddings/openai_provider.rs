@@ -135,7 +135,7 @@ impl Embedder for OpenAiEmbedding {
         let api_key = env::var("OPENAI_API_KEY").unwrap_or_default();
         
         // Validate API key if authentication is required
-        if let Some(_) = self.get_auth_header(&api_key) {
+        if self.get_auth_header(&api_key).is_some() {
             if api_key.is_empty() {
                 return Err(DomainError::CannotFetchMetadata(
                     "OPENAI_API_KEY environment variable not set".to_string(),
