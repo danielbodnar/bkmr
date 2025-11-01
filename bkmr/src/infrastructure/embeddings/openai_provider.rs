@@ -5,7 +5,20 @@ use std::any::Any;
 use std::env;
 use tracing::{debug, instrument};
 
-/// Implementation using OpenAI's embedding API
+/// Implementation using OpenAI-compatible embedding API
+/// 
+/// Supports any OpenAI-compatible embeddings provider (OpenAI, Ollama, HuggingFace, Voyage AI, etc.)
+/// 
+/// Configuration via environment variables (for backward compatibility, all use OPENAI_* prefix):
+/// - `OPENAI_API_KEY`: API key for authentication (required)
+/// - `OPENAI_API_URL`: Base URL for the API endpoint (optional, defaults to "https://api.openai.com")
+/// - `OPENAI_MODEL`: Model name to use for embeddings (optional, defaults to "text-embedding-ada-002")
+/// 
+/// Examples:
+/// - OpenAI: Use defaults
+/// - Ollama: Set OPENAI_API_URL="http://localhost:11434" and OPENAI_MODEL="nomic-embed-text"
+/// - HuggingFace: Set OPENAI_API_URL to HF endpoint and appropriate model
+/// - Voyage AI: Set OPENAI_API_URL and OPENAI_MODEL accordingly
 #[derive(Debug, Clone)]
 pub struct OpenAiEmbedding {
     url: String,
@@ -14,10 +27,30 @@ pub struct OpenAiEmbedding {
 
 impl Default for OpenAiEmbedding {
     fn default() -> Self {
-        Self {
-            url: "https://api.openai.com".to_string(),
-            model: "text-embedding-ada-002".to_string(),
-        }
+        Self::from_env()
+    }
+}
+
+impl OpenAiEmbedding {
+    /// Create a new OpenAI-compatible embedder with explicit configuration
+    pub fn new(url: String, model: String) -> Self {
+        Self { url, model }
+    }
+
+    /// Create embedder from environment variables
+    /// 
+    /// Reads configuration from:
+    /// - OPENAI_API_URL (defaults to "https://api.openai.com")
+    /// - OPENAI_MODEL (defaults to "text-embedding-ada-002")
+    pub fn from_env() -> Self {
+        let url = env::var("OPENAI_API_URL")
+            .unwrap_or_else(|_| "https://api.openai.com".to_string());
+        let model = env::var("OPENAI_MODEL")
+            .unwrap_or_else(|_| "text-embedding-ada-002".to_string());
+        
+        debug!("OpenAI embedder configured with URL: {}, Model: {}", url, model);
+        
+        Self { url, model }
     }
 }
 
@@ -75,11 +108,7 @@ impl Embedder for OpenAiEmbedding {
     }
 }
 
-impl OpenAiEmbedding {
-    pub fn new(url: String, model: String) -> Self {
-        Self { url, model }
-    }
-}
+
 
 #[cfg(test)]
 mod tests {

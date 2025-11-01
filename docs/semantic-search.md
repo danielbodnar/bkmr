@@ -8,8 +8,49 @@ Semantic search uses AI embeddings (vector representations of text) to capture t
 
 ## Requirements
 
-- OpenAI API key set as environment variable: `OPENAI_API_KEY`
+- API key set as environment variable: `OPENAI_API_KEY`
 - The `--openai` flag when running commands that use embeddings
+
+## Configuring Embedding Providers
+
+`bkmr` supports any OpenAI-compatible embeddings provider through environment variables. By default, it uses OpenAI, but you can easily switch to other providers:
+
+### OpenAI (Default)
+```bash
+export OPENAI_API_KEY="sk-your-api-key"
+# Optional: Customize model (defaults to text-embedding-ada-002)
+export OPENAI_MODEL="text-embedding-ada-002"
+```
+
+### Ollama (Local Embeddings)
+```bash
+export OPENAI_API_URL="http://localhost:11434"
+export OPENAI_MODEL="nomic-embed-text"
+export OPENAI_API_KEY="ollama"  # Ollama doesn't require a real key
+```
+
+### HuggingFace
+```bash
+export OPENAI_API_URL="https://api-inference.huggingface.co"
+export OPENAI_MODEL="sentence-transformers/all-MiniLM-L6-v2"
+export OPENAI_API_KEY="hf_your-api-key"
+```
+
+### Voyage AI
+```bash
+export OPENAI_API_URL="https://api.voyageai.com"
+export OPENAI_MODEL="voyage-2"
+export OPENAI_API_KEY="pa-your-api-key"
+```
+
+### Custom OpenAI-Compatible Endpoints
+```bash
+export OPENAI_API_URL="https://your-custom-endpoint.com"
+export OPENAI_MODEL="your-embedding-model"
+export OPENAI_API_KEY="your-api-key"
+```
+
+**Note:** The environment variable names use the `OPENAI_` prefix for backward compatibility, but work with any OpenAI-compatible provider.
 
 ## Basic Usage
 
@@ -114,8 +155,9 @@ Semantic search transforms how developers access information:
 
 ## Technical Details
 
-- `bkmr` uses OpenAI's text-embedding-ada-002 model by default
-- Only portions of bookmarks marked as embeddable are sent to OpenAI for embedding generation
+- `bkmr` uses OpenAI's text-embedding-ada-002 model by default, but supports any OpenAI-compatible provider
+- You can customize the API endpoint and model via `OPENAI_API_URL` and `OPENAI_MODEL` environment variables
+- Only portions of bookmarks marked as embeddable are sent to the embeddings API
 - Embeddings and content hashes are stored locally in your database
 - Similarity is calculated using cosine similarity between vector representations
 - File content is tracked using content hashes to minimize unnecessary API calls
@@ -137,11 +179,13 @@ Content that may not benefit as much:
 
 ## Privacy Considerations
 
-When using the OpenAI integration:
+When using embeddings providers:
 
-- Content from your bookmarks is sent to OpenAI's API for embedding generation
-- No content is stored by OpenAI, but it may be used to improve their services
-- If you have privacy concerns, consider carefully which bookmarks you mark as embeddable
+- Content from your bookmarks is sent to the configured embeddings API for vector generation
+- Privacy policies vary by provider (OpenAI, HuggingFace, Voyage AI, etc.)
+- For maximum privacy, consider using local providers like Ollama
+- If you have privacy concerns, carefully choose which bookmarks you mark as embeddable
+- Local providers like Ollama keep all data on your machine
 
 ## Combining with Template Interpolation
 
