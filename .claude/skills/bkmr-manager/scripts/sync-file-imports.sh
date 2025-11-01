@@ -45,7 +45,7 @@ EOF
     exit 1
 }
 
-[[ -z "$IMPORT_DIR" ]] || [[ -z "$BASE_PATH" ]] && usage
+[[ -z "$IMPORT_DIR" || -z "$BASE_PATH" ]] && usage
 
 # Verify bkmr
 if ! command -v bkmr &> /dev/null; then
