@@ -1,8 +1,8 @@
-use bkmr::util::test_service_container::TestServiceContainer;
 use bkmr::cli::args::{Cli, Commands};
 use bkmr::domain::repositories::repository::BookmarkRepository;
 use bkmr::domain::tag::Tag;
 use bkmr::infrastructure::repositories::sqlite::repository::SqliteBookmarkRepository;
+use bkmr::util::test_service_container::TestServiceContainer;
 use bkmr::util::testing::{init_test_env, EnvGuard};
 use std::collections::HashSet;
 use std::io::Write;

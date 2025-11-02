@@ -1,6 +1,6 @@
 use assert_cmd::Command;
-use bkmr::util::test_service_container::TestServiceContainer;
 use bkmr::domain::tag::Tag;
+use bkmr::util::test_service_container::TestServiceContainer;
 use bkmr::util::testing::{init_test_env, EnvGuard};
 use std::collections::HashSet;
 

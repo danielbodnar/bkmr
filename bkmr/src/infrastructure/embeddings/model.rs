@@ -1,9 +1,9 @@
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Serialize)]
-pub struct EmbeddingRequest {
-    pub(crate) input: String,
-    pub(crate) model: String,
+pub struct EmbeddingRequest<'a> {
+    pub(crate) input: &'a str,
+    pub(crate) model: &'a str,
 }
 
 #[derive(Deserialize)]
