@@ -3,8 +3,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
-// Service container dependency injection implemented  
-use crate::infrastructure::di::ServiceContainer;
+// Service container dependency injection implemented
 use crate::cli::bookmark_commands;
 use crate::cli::error::CliResult;
 use crate::cli::process::{
@@ -14,6 +13,7 @@ use crate::cli::process::{
 use crate::domain::bookmark::Bookmark;
 use crate::domain::search::SemanticSearchResult;
 use crate::domain::system_tag::SystemTag;
+use crate::infrastructure::di::ServiceContainer;
 use crate::util::helper::{format_file_path, format_mtime};
 use crossterm::style::Stylize;
 use crossterm::{
@@ -64,10 +64,10 @@ struct AlignedBookmark {
 impl SkimItem for AlignedBookmark {
     fn text(&self) -> Cow<'_, str> {
         let display_text = create_bookmark_display_text(
-            &self.bookmark, 
-            self.max_id_width, 
-            &self.action_description, 
-            &self.settings
+            &self.bookmark,
+            self.max_id_width,
+            &self.action_description,
+            &self.settings,
         );
         Cow::Owned(display_text)
     }
@@ -174,46 +174,53 @@ impl SkimItem for AlignedBookmark {
 
 /// Create display text for a bookmark with proper formatting
 fn create_bookmark_display_text(
-    bookmark: &Bookmark, 
-    max_id_width: usize, 
-    action_description: &str, 
-    settings: &crate::config::Settings
+    bookmark: &Bookmark,
+    max_id_width: usize,
+    action_description: &str,
+    settings: &crate::config::Settings,
 ) -> String {
     let id = bookmark.id.unwrap_or(0);
     let title = &bookmark.title;
     let url = &bookmark.url;
     let binding = bookmark.formatted_tags();
     let tags_str = binding.trim_matches(',');
-    
+
     let fzf_opts = &settings.fzf_opts;
-    
+
     // Format based on config options
     let tags_display = if fzf_opts.show_tags {
         format!(" [{}]", tags_str)
     } else {
         String::new()
     };
-    
+
     let action_display = if fzf_opts.show_action {
         format!(" ({})", action_description)
     } else {
         String::new()
     };
-    
+
     let mut text = if fzf_opts.no_url {
         format!(
             "{:>width$}: {}{}{}",
-            id, title, action_display, tags_display,
+            id,
+            title,
+            action_display,
+            tags_display,
             width = max_id_width
         )
     } else {
         format!(
             "{:>width$}: {} <{}>{}{}",
-            id, title, url, action_display, tags_display,
+            id,
+            title,
+            url,
+            action_display,
+            tags_display,
             width = max_id_width
         )
     };
-    
+
     // Add file info if present and enabled
     if fzf_opts.show_file_info {
         if let (Some(file_path), Some(file_mtime)) = (&bookmark.file_path, bookmark.file_mtime) {
@@ -226,7 +233,7 @@ fn create_bookmark_display_text(
             ));
         }
     }
-    
+
     text
 }
 
@@ -425,7 +432,12 @@ impl SkimItem for SemanticSearchResult {
 
 /// Processes bookmarks using the fzf-like selector interface
 #[instrument(skip(bookmarks), level = "debug")]
-pub fn fzf_process(bookmarks: &[Bookmark], style: &str, services: &ServiceContainer, settings: &crate::config::Settings) -> CliResult<()> {
+pub fn fzf_process(
+    bookmarks: &[Bookmark],
+    style: &str,
+    services: &ServiceContainer,
+    settings: &crate::config::Settings,
+) -> CliResult<()> {
     if bookmarks.is_empty() {
         eprintln!("No bookmarks to display");
         return Ok(());
@@ -482,7 +494,13 @@ pub fn fzf_process(bookmarks: &[Bookmark], style: &str, services: &ServiceContai
 
     // Send bookmarks to skim based on style
     if style == "enhanced" {
-        let skim_items = create_enhanced_skim_items(&sorted_bookmarks, max_id_width, services, fzf_opts.show_file_info, fzf_opts.show_action);
+        let skim_items = create_enhanced_skim_items(
+            &sorted_bookmarks,
+            max_id_width,
+            services,
+            fzf_opts.show_file_info,
+            fzf_opts.show_action,
+        );
         for item in skim_items {
             tx_item.send(item).map_err(|_| {
                 crate::cli::error::CliError::CommandFailed(
@@ -494,10 +512,12 @@ pub fn fzf_process(bookmarks: &[Bookmark], style: &str, services: &ServiceContai
         // Original style - use AlignedBookmark instead
         for bookmark in &sorted_bookmarks {
             debug!("Sending bookmark to skim: {}", bookmark.title);
-            
+
             // Get action description
-            let action_description = services.action_service.get_default_action_description(bookmark);
-            
+            let action_description = services
+                .action_service
+                .get_default_action_description(bookmark);
+
             let item = Arc::new(AlignedBookmark {
                 bookmark: bookmark.clone(),
                 max_id_width,
@@ -569,14 +589,24 @@ pub fn fzf_process(bookmarks: &[Bookmark], style: &str, services: &ServiceContai
                         copy_url_to_clipboard(&command, services.clipboard_service.clone())?;
                     } else {
                         // For all other types, copy URL to clipboard with interpolation
-                        copy_bookmark_url_to_clipboard(bookmark, services.interpolation_service.clone(), services.clipboard_service.clone())?;
+                        copy_bookmark_url_to_clipboard(
+                            bookmark,
+                            services.interpolation_service.clone(),
+                            services.clipboard_service.clone(),
+                        )?;
                     }
                 }
             }
             Key::Ctrl('e') => {
                 clear_fzf_artifacts();
                 // Edit selected bookmarks
-                edit_bookmarks(ids, false, services.bookmark_service.clone(), services.template_service.clone(), settings)?;
+                edit_bookmarks(
+                    ids,
+                    false,
+                    services.bookmark_service.clone(),
+                    services.template_service.clone(),
+                    settings,
+                )?;
             }
             Key::Ctrl('d') => {
                 // clear_fzf_artifacts();
@@ -588,7 +618,11 @@ pub fn fzf_process(bookmarks: &[Bookmark], style: &str, services: &ServiceContai
                 // Clone selected bookmark
                 if let Some(bookmark) = selected_bookmarks.first() {
                     if let Some(id) = bookmark.id {
-                        clone_bookmark(id, services.bookmark_service.clone(), services.template_service.clone())?;
+                        clone_bookmark(
+                            id,
+                            services.bookmark_service.clone(),
+                            services.template_service.clone(),
+                        )?;
                     }
                 }
             }
@@ -707,4 +741,3 @@ fn clear_terminal_completely() {
     // 3. If all else fails, at least print newlines to push fzf UI off the visible area
     // println!("\n\n\n\n\n\n\n\n");  // results in cursor jumping
 }
-
