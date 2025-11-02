@@ -1,8 +1,7 @@
 // src/cli/bookmark_commands.rs
-use crate::config::Settings;
 use crate::application::actions::MarkdownAction;
+use crate::config::Settings;
 // Service container dependency injection implemented via SearchCommandHandler
-use crate::infrastructure::di::ServiceContainer;
 use crate::application::services::action_service::ActionService;
 use crate::application::services::bookmark_service::BookmarkService;
 use crate::application::services::tag_service::TagService;
@@ -18,6 +17,7 @@ use crate::domain::repositories::repository::BookmarkRepository;
 use crate::domain::search::SemanticSearch;
 use crate::domain::system_tag::SystemTag;
 use crate::domain::tag::Tag;
+use crate::infrastructure::di::ServiceContainer;
 use crate::infrastructure::embeddings::{DummyEmbedding, OpenAiCompatibleEmbedding};
 use crate::infrastructure::json::{write_bookmarks_as_json, JsonBookmarkView};
 use crate::infrastructure::repositories::sqlite::migration;
@@ -48,9 +48,9 @@ fn get_ids(ids: String) -> CliResult<Vec<i32>> {
 
 #[instrument(skip(stderr, cli, services))]
 pub fn semantic_search(
-    mut stderr: StandardStream, 
-    cli: Cli, 
-    services: &ServiceContainer
+    mut stderr: StandardStream,
+    cli: Cli,
+    services: &ServiceContainer,
 ) -> CliResult<()> {
     if let Commands::SemSearch {
         query,
@@ -60,16 +60,24 @@ pub fn semantic_search(
     {
         // Check if embedder is DummyEmbedding and provide helpful error message
         if services.embedder.as_any().type_id() == std::any::TypeId::of::<DummyEmbedding>() {
-            writeln!(stderr, "{}", "Error: Semantic search requires embeddings. Use --openai flag.".red())
-                .cli_context("writing DummyEmbedding error message to stderr")?;
-            return Err(CliError::CommandFailed("No embeddings available - use --openai flag".to_string()));
+            writeln!(
+                stderr,
+                "{}",
+                "Error: Semantic search requires embeddings. Use --openai flag.".red()
+            )
+            .cli_context("writing DummyEmbedding error message to stderr")?;
+            return Err(CliError::CommandFailed(
+                "No embeddings available - use --openai flag".to_string(),
+            ));
         }
 
         // Create the semantic search domain object
         let search = SemanticSearch::new(query, limit.map(|l| l as usize));
 
         // Perform semantic search
-        let results = services.bookmark_service.semantic_search(&search)
+        let results = services
+            .bookmark_service
+            .semantic_search(&search)
             .cli_context("performing semantic search on bookmarks")?;
 
         if results.is_empty() {
@@ -120,19 +128,24 @@ pub fn semantic_search(
         if !non_interactive && !is_piped && !results.is_empty() && confirm("Open bookmark(s)?") {
             // Prompt for which bookmark to open
             print!("Enter ID(s) to open (comma-separated): ");
-            io::stdout().flush()
+            io::stdout()
+                .flush()
                 .cli_context("flushing stdout after prompt")?;
 
             let mut input = String::new();
-            io::stdin().read_line(&mut input)
+            io::stdin()
+                .read_line(&mut input)
                 .cli_context("reading user input for bookmark IDs")?;
 
             let ids = get_ids(input.trim().to_string())
                 .cli_context("parsing bookmark IDs from user input")?;
             for id in ids {
                 if let Some(result) = results.iter().find(|r| r.bookmark.id == Some(id)) {
-                    execute_bookmark_default_action(&result.bookmark, services.action_service.clone())
-                        .cli_context("executing default action for selected bookmark")?;
+                    execute_bookmark_default_action(
+                        &result.bookmark,
+                        services.action_service.clone(),
+                    )
+                    .cli_context("executing default action for selected bookmark")?;
                 } else {
                     writeln!(stderr, "Bookmark with ID {} not found in results", id)?;
                 }
@@ -144,9 +157,9 @@ pub fn semantic_search(
 
 #[instrument(skip(cli, bookmark_service, action_service))]
 pub fn open(
-    cli: Cli, 
+    cli: Cli,
     bookmark_service: Arc<dyn BookmarkService>,
-    action_service: Arc<dyn ActionService>
+    action_service: Arc<dyn ActionService>,
 ) -> CliResult<()> {
     if let Commands::Open {
         ids,
@@ -157,15 +170,15 @@ pub fn open(
     {
         if file {
             // Handle direct file viewing
-            handle_file_viewing(&ids)
-                .cli_context("handling direct file viewing")?;
+            handle_file_viewing(&ids).cli_context("handling direct file viewing")?;
         } else {
             // Handle bookmark opening (existing logic)
 
-            for id in get_ids(ids)
-                .cli_context("parsing bookmark IDs for opening")? {
-                if let Some(bookmark) = bookmark_service.get_bookmark(id)
-                    .cli_context("retrieving bookmark for opening")? {
+            for id in get_ids(ids).cli_context("parsing bookmark IDs for opening")? {
+                if let Some(bookmark) = bookmark_service
+                    .get_bookmark(id)
+                    .cli_context("retrieving bookmark for opening")?
+                {
                     // Use action service to execute default action
                     let action_type = action_service.get_default_action_description(&bookmark);
                     eprintln!("Performing '{}' for: {}", action_type, bookmark.title);
@@ -258,9 +271,9 @@ fn process_content_for_type(content: &str, system_tag: SystemTag) -> String {
 
 #[instrument(skip(cli, bookmark_service, template_service))]
 pub fn add(
-    cli: Cli, 
+    cli: Cli,
     bookmark_service: Arc<dyn BookmarkService>,
-    template_service: Arc<dyn TemplateService>
+    template_service: Arc<dyn TemplateService>,
 ) -> CliResult<()> {
     if let Commands::Add {
         url,
@@ -274,7 +287,6 @@ pub fn add(
         stdin,
     } = cli.command.unwrap()
     {
-
         // Convert bookmark_type string to SystemTag
         let system_tag = match bookmark_type.to_lowercase().as_str() {
             "snip" => SystemTag::Snippet,
@@ -414,7 +426,6 @@ pub fn add(
 #[instrument(skip(cli, bookmark_service))]
 pub fn delete(cli: Cli, bookmark_service: Arc<dyn BookmarkService>) -> CliResult<()> {
     if let Commands::Delete { ids } = cli.command.unwrap() {
-
         let id_list = get_ids(ids)?;
 
         for id in id_list {
@@ -440,9 +451,9 @@ pub fn delete(cli: Cli, bookmark_service: Arc<dyn BookmarkService>) -> CliResult
 
 #[instrument(skip(cli, bookmark_service, tag_service))]
 pub fn update(
-    cli: Cli, 
+    cli: Cli,
     bookmark_service: Arc<dyn BookmarkService>,
-    tag_service: Arc<dyn TagService>
+    tag_service: Arc<dyn TagService>,
 ) -> CliResult<()> {
     if let Commands::Update {
         ids,
@@ -451,7 +462,6 @@ pub fn update(
         force,
     } = cli.command.unwrap()
     {
-
         let id_list = get_ids(ids)?;
 
         for id in id_list {
@@ -495,13 +505,12 @@ pub fn update(
 
 #[instrument(skip(cli, bookmark_service, template_service, settings))]
 pub fn edit(
-    cli: Cli, 
+    cli: Cli,
     bookmark_service: Arc<dyn BookmarkService>,
     template_service: Arc<dyn TemplateService>,
-    settings: &crate::config::Settings
+    settings: &crate::config::Settings,
 ) -> CliResult<()> {
     if let Commands::Edit { ids, force_db } = cli.command.unwrap() {
-
         let id_list = get_ids(ids)?;
 
         // Get all bookmarks to edit first
@@ -519,7 +528,13 @@ pub fn edit(
             return Ok(());
         }
 
-        edit_bookmarks(id_list, force_db, bookmark_service, template_service, settings)?;
+        edit_bookmarks(
+            id_list,
+            force_db,
+            bookmark_service,
+            template_service,
+            settings,
+        )?;
     }
     Ok(())
 }
@@ -751,8 +766,7 @@ pub fn set_embeddable(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
 pub fn backfill(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
     if let Commands::Backfill { dry_run, force } = cli.command.unwrap() {
         // Check embedder type using services instead of global state
-        if services.embedder.as_any().type_id() == std::any::TypeId::of::<DummyEmbedding>()
-        {
+        if services.embedder.as_any().type_id() == std::any::TypeId::of::<DummyEmbedding>() {
             eprintln!("{}", "Error: Cannot backfill embeddings with DummyEmbedding active. Please use --openai flag.".red());
             return Err(CliError::CommandFailed(
                 "DummyEmbedding active - embeddings not available".to_string(),
@@ -842,8 +856,7 @@ pub fn load_texts(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
     } = cli.command.unwrap()
     {
         // Check embedder type using services instead of global state
-        if services.embedder.as_any().type_id() == std::any::TypeId::of::<DummyEmbedding>()
-        {
+        if services.embedder.as_any().type_id() == std::any::TypeId::of::<DummyEmbedding>() {
             eprintln!(
                 "{}",
                 "Error: Cannot load texts with DummyEmbedding active. Please use --openai flag."
@@ -890,22 +903,20 @@ pub fn info(cli: Cli, services: &ServiceContainer, settings: &Settings) -> CliRe
         println!("  FZF Hide URL: {}", settings.fzf_opts.no_url);
 
         // Embedder type using services
-        let embedder_type = if services.embedder.as_any().type_id()
-            == std::any::TypeId::of::<DummyEmbedding>()
-        {
-            "DummyEmbedding (embeddings disabled)"
-        } else if services.embedder.as_any().type_id()
-            == std::any::TypeId::of::<OpenAiCompatibleEmbedding>()
-        {
-            // Show provider info if available
-            let provider_info = std::env::var("OPENAI_PROVIDER")
-                .ok()
-                .map(|p| format!(" [provider: {}]", p))
-                .unwrap_or_default();
-            format!("OpenAI-compatible embeddings (enabled){}", provider_info).leak()
-        } else {
-            "Unknown embedder"
-        };
+        let embedder_type =
+            if services.embedder.as_any().type_id() == std::any::TypeId::of::<DummyEmbedding>() {
+                "DummyEmbedding (embeddings disabled)".to_string()
+            } else if services.embedder.as_any().type_id()
+                == std::any::TypeId::of::<OpenAiCompatibleEmbedding>()
+            {
+                let provider_info = std::env::var("OPENAI_PROVIDER")
+                    .ok()
+                    .map(|p| format!(" [provider: {}]", p))
+                    .unwrap_or_default();
+                format!("OpenAI-compatible embeddings (enabled){}", provider_info)
+            } else {
+                "Unknown embedder".to_string()
+            };
         println!("  Embedder: {}", embedder_type);
 
         // Number of entries
@@ -979,8 +990,10 @@ fn display_system_tag_stats(repository: &SqliteBookmarkRepository) -> CliResult<
 }
 
 /// Pre-fills the database with a variety of demo entries to showcase bkmr's features
-pub fn pre_fill_database(repository: &SqliteBookmarkRepository, embedder: &dyn crate::domain::embedding::Embedder) -> CliResult<()> {
-
+pub fn pre_fill_database(
+    repository: &SqliteBookmarkRepository,
+    embedder: &dyn crate::domain::embedding::Embedder,
+) -> CliResult<()> {
     // Create demo entries
     let demo_entries = vec![
         // Regular URLs

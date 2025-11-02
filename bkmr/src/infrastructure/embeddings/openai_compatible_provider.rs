@@ -6,21 +6,25 @@ use std::any::Any;
 use std::env;
 use tracing::{debug, instrument};
 
-/// Generic implementation for OpenAI-compatible embedding APIs
-/// 
+/// Generic implementation for OpenAI-compatible embedding APIs.
+///
 /// This provider works with any service that implements the OpenAI embeddings API format,
 /// including OpenAI, Voyage AI, Ollama, and other compatible providers.
-/// 
+///
+/// # Configuration
+///
 /// Configuration is done via environment variables:
-/// - OPENAI_API_KEY: The API key for authentication
-/// - OPENAI_API_BASE: (Optional) Base URL for the API endpoint
-/// - OPENAI_MODEL: (Optional) Model name to use for embeddings
-/// - OPENAI_PROVIDER: (Optional) Named provider (openai, voyageai, ollama, etc.)
-/// 
-/// Note: For providers with non-standard authentication or response formats,
+/// - `OPENAI_API_KEY`: The API key for authentication
+/// - `OPENAI_API_BASE`: (Optional) Base URL for the API endpoint
+/// - `OPENAI_MODEL`: (Optional) Model name to use for embeddings
+/// - `OPENAI_PROVIDER`: (Optional) Named provider (openai, voyageai, ollama, etc.)
+///
+/// # Limitations
+///
+/// For providers with non-standard authentication or response formats,
 /// this implementation may need to be extended to support provider-specific
 /// authentication headers or response parsing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiCompatibleEmbedding {
     api_base: String,
     model: String,
@@ -34,15 +38,36 @@ impl Default for OpenAiCompatibleEmbedding {
 }
 
 impl OpenAiCompatibleEmbedding {
-    /// Create a new embedding provider from environment variables
+    /// Creates an embedding provider from environment variables.
+    ///
+    /// # Environment Variables
+    ///
+    /// - `OPENAI_API_KEY` (required): API key for authentication
+    /// - `OPENAI_PROVIDER` (optional): Named provider (openai, voyageai, ollama, huggingface, local)
+    /// - `OPENAI_API_BASE` (optional): Custom API endpoint URL override
+    /// - `OPENAI_MODEL` (optional): Model name override
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use bkmr::infrastructure::embeddings::OpenAiCompatibleEmbedding;
+    ///
+    /// std::env::set_var("OPENAI_API_KEY", "sk-...");
+    /// std::env::set_var("OPENAI_PROVIDER", "openai");
+    ///
+    /// let embedder = OpenAiCompatibleEmbedding::from_env();
+    /// ```
+    ///
+    /// # Provider Selection
+    ///
+    /// If `OPENAI_PROVIDER` matches a known provider, that provider's defaults
+    /// are used. Environment variables can override any default setting.
     pub fn from_env() -> Self {
-        // Check for provider name first
         let provider_name = env::var("OPENAI_PROVIDER")
             .ok()
             .unwrap_or_else(|| "openai".to_string());
 
         if let Some(config) = get_provider(&provider_name) {
-            // Use provider config as base, but allow overrides
             let api_base = env::var("OPENAI_API_BASE")
                 .ok()
                 .unwrap_or_else(|| config.api_base.to_string());
@@ -56,7 +81,6 @@ impl OpenAiCompatibleEmbedding {
                 provider_config: Some(config),
             }
         } else {
-            // Fallback to manual configuration
             let api_base = env::var("OPENAI_API_BASE")
                 .ok()
                 .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
@@ -72,7 +96,23 @@ impl OpenAiCompatibleEmbedding {
         }
     }
 
-    /// Create a new embedding provider with explicit configuration
+    /// Creates a new embedding provider with explicit configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `api_base` - The base URL for the API endpoint (e.g., "https://api.openai.com/v1")
+    /// * `model` - The model name to use for embeddings
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bkmr::infrastructure::embeddings::OpenAiCompatibleEmbedding;
+    ///
+    /// let embedder = OpenAiCompatibleEmbedding::new(
+    ///     "https://api.openai.com/v1".to_string(),
+    ///     "text-embedding-ada-002".to_string()
+    /// );
+    /// ```
     pub fn new(api_base: String, model: String) -> Self {
         Self {
             api_base,
@@ -81,13 +121,47 @@ impl OpenAiCompatibleEmbedding {
         }
     }
 
-    /// Create a new embedding provider for a named provider
+    /// Creates a provider for a named provider.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_name` - One of: "openai", "voyageai", "ollama", "huggingface", "local"
+    ///
+    /// # Returns
+    ///
+    /// `Some(Self)` if the provider is known, `None` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bkmr::infrastructure::embeddings::OpenAiCompatibleEmbedding;
+    ///
+    /// let voyageai = OpenAiCompatibleEmbedding::for_provider("voyageai").unwrap();
+    /// assert_eq!(voyageai.model, "voyage-3-large");
+    /// ```
     pub fn for_provider(provider_name: &str) -> Option<Self> {
         get_provider(provider_name).map(|config| Self {
             api_base: config.api_base.to_string(),
             model: config.default_model.to_string(),
             provider_config: Some(config),
         })
+    }
+
+    /// Returns the provider name for error messages and logging.
+    fn provider_name(&self) -> &str {
+        self.provider_config
+            .as_ref()
+            .map(|c| c.name)
+            .unwrap_or("custom")
+    }
+
+    /// Returns authentication header name and value for the configured provider.
+    fn get_auth_header(&self, api_key: &str) -> (&'static str, String) {
+        if let Some(ref config) = self.provider_config {
+            config.get_auth_header(api_key)
+        } else {
+            ("Authorization", format!("Bearer {}", api_key))
+        }
     }
 }
 
@@ -101,27 +175,23 @@ impl Embedder for OpenAiCompatibleEmbedding {
             self.model
         );
 
+        let provider_name = self.provider_name();
+
         let api_key = env::var("OPENAI_API_KEY").map_err(|_| {
-            DomainError::CannotFetchMetadata(
-                "OPENAI_API_KEY environment variable not set".to_string(),
-            )
+            DomainError::CannotFetchMetadata(format!(
+                "OPENAI_API_KEY environment variable not set (provider: {})",
+                provider_name
+            ))
         })?;
 
         let client = reqwest::blocking::Client::new();
 
         let request = EmbeddingRequest {
-            input: text.to_string(),
-            model: self.model.clone(),
+            input: text,
+            model: &self.model,
         };
 
-        // Determine authentication header based on provider config
-        let (auth_header_name, auth_header_value) = if let Some(ref config) = self.provider_config
-        {
-            config.get_auth_header(&api_key)
-        } else {
-            // Default to Bearer token (OpenAI style)
-            ("Authorization", format!("Bearer {}", api_key))
-        };
+        let (auth_header_name, auth_header_value) = self.get_auth_header(&api_key);
 
         let response = client
             .post(format!("{}/embeddings", self.api_base))
@@ -129,27 +199,33 @@ impl Embedder for OpenAiCompatibleEmbedding {
             .json(&request)
             .send()
             .map_err(|e| {
-                DomainError::CannotFetchMetadata(format!("API request failed: {}", e))
+                DomainError::CannotFetchMetadata(format!(
+                    "API request failed for provider '{}' (endpoint: {}): {}",
+                    provider_name, self.api_base, e
+                ))
             })?;
 
         if !response.status().is_success() {
             let status = response.status();
-            let error_text = response.text().map_err(|e| {
-                DomainError::CannotFetchMetadata(format!("Failed to read error response: {}", e))
-            })?;
+            let error_text = response
+                .text()
+                .unwrap_or_else(|_| "Unable to read error".to_string());
 
             return Err(DomainError::CannotFetchMetadata(format!(
-                "API returned error (status {}): {}",
-                status, error_text
+                "Provider '{}' returned error (status {}): {}",
+                provider_name, status, error_text
             )));
         }
 
         let response_data: EmbeddingResponse = response.json().map_err(|e| {
-            DomainError::CannotFetchMetadata(format!("Failed to parse API response: {}", e))
+            DomainError::CannotFetchMetadata(format!(
+                "Failed to parse response from provider '{}': {}",
+                provider_name, e
+            ))
         })?;
 
         if response_data.data.is_empty() {
-            debug!("API returned empty data array");
+            debug!("Provider '{}' returned empty data array", provider_name);
             return Ok(None);
         }
 
@@ -165,12 +241,13 @@ impl Embedder for OpenAiCompatibleEmbedding {
 mod tests {
     use super::*;
     use crate::util::testing::init_test_env;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn given_text_input_when_create_embedding_then_returns_vector() {
         let _ = init_test_env();
         if env::var("OPENAI_API_KEY").is_err() {
-            // exit early if no API key is set
             eprintln!("OPENAI_API_KEY environment variable not set");
             return;
         }
@@ -178,14 +255,13 @@ mod tests {
         let embedder = OpenAiCompatibleEmbedding::default();
         let result = embedder.embed("test text");
         assert!(result.is_ok());
-        // OpenAI's text-embedding-ada-002 produces 1536-dimensional embeddings
         let embedding = result.unwrap().unwrap();
         assert!(!embedding.is_empty());
     }
 
     #[test]
+    #[serial]
     fn given_missing_api_key_when_create_embedding_then_returns_error() {
-        // Temporarily unset the API key if it exists
         let api_key_backup = env::var("OPENAI_API_KEY").ok();
 
         env::remove_var("OPENAI_API_KEY");
@@ -194,7 +270,6 @@ mod tests {
         let result = embedder.embed("test text");
         assert!(result.is_err());
 
-        // Restore API key if it existed
         if let Some(key) = api_key_backup {
             env::set_var("OPENAI_API_KEY", key);
         }
@@ -202,7 +277,6 @@ mod tests {
 
     #[test]
     fn test_provider_selection() {
-        // Test that provider can be selected
         let voyageai = OpenAiCompatibleEmbedding::for_provider("voyageai");
         assert!(voyageai.is_some());
         let voyageai = voyageai.unwrap();
@@ -217,13 +291,12 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_env_override() {
-        // Save current env
         let saved_provider = env::var("OPENAI_PROVIDER").ok();
         let saved_base = env::var("OPENAI_API_BASE").ok();
         let saved_model = env::var("OPENAI_MODEL").ok();
 
-        // Set test values
         env::set_var("OPENAI_PROVIDER", "voyageai");
         env::set_var("OPENAI_API_BASE", "https://custom.example.com/v1");
         env::set_var("OPENAI_MODEL", "custom-model");
@@ -232,7 +305,6 @@ mod tests {
         assert_eq!(embedder.api_base, "https://custom.example.com/v1");
         assert_eq!(embedder.model, "custom-model");
 
-        // Restore env
         env::remove_var("OPENAI_PROVIDER");
         env::remove_var("OPENAI_API_BASE");
         env::remove_var("OPENAI_MODEL");

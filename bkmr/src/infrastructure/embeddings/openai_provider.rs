@@ -35,8 +35,8 @@ impl Embedder for OpenAiEmbedding {
         let client = reqwest::blocking::Client::new();
 
         let request = EmbeddingRequest {
-            input: text.to_string(),
-            model: self.model.clone(),
+            input: text,
+            model: &self.model,
         };
 
         let response = client
@@ -85,8 +85,10 @@ impl OpenAiEmbedding {
 mod tests {
     use super::*;
     use crate::util::testing::init_test_env;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn given_text_input_when_create_embedding_then_returns_vector() {
         let _ = init_test_env();
         if env::var("OPENAI_API_KEY").is_err() {
@@ -102,6 +104,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn given_missing_api_key_when_create_embedding_then_returns_error() {
         // Temporarily unset the API key if it exists
         let key_exists = env::var("OPENAI_API_KEY").is_ok();
