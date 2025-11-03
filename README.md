@@ -104,6 +104,12 @@ bkmr create-db ~/.config/bkmr/bkmr.db
 
 # Optional: Configure location
 export BKMR_DB_URL=~/path/to/db
+
+# Optional: Configure OpenAI API for semantic search
+export OPENAI_API_KEY=your-api-key-here
+# For OpenAI-compatible APIs (Voyage AI, Ollama, etc.):
+export OPENAI_API_BASE=https://api.voyageai.com  # or your custom endpoint
+export OPENAI_MODEL=voyage-3                     # or your preferred model
 ```
 
 ### First Use
@@ -126,7 +132,7 @@ bkmr search --fzf
 | Command | Description |
 |---------|-------------|
 | `search` | Search across all content with full-text and tag filtering |
-| `sem-search` | AI-powered semantic search using OpenAI embeddings |
+| `sem-search` | AI-powered semantic search using OpenAI-compatible embeddings |
 | `add` | Add new content (URLs, snippets, files, shell commands, etc.) |
 | `open` | Launch or interact with stored items (supports script arguments) |
 | `edit` | Smart editing: auto-detects file-imported bookmarks |
@@ -172,7 +178,7 @@ Comprehensive documentation is available in the **[bkmr Wiki](https://github.com
 - **[Configuration](https://github.com/sysid/bkmr/wiki/Configuration)** - Complete configuration reference
 - **[Template Interpolation](https://github.com/sysid/bkmr/wiki/Template-Interpolation)** - Jinja2 dynamic content
 - **[File Import and Editing](https://github.com/sysid/bkmr/wiki/File-Import-and-Editing)** - Frontmatter, base paths, smart editing
-- **[Semantic Search](https://github.com/sysid/bkmr/wiki/Semantic-Search)** - OpenAI-powered AI search
+- **[Semantic Search](https://github.com/sysid/bkmr/wiki/Semantic-Search)** - OpenAI-compatible AI search
 - **[Editor Integration](https://github.com/sysid/bkmr/wiki/Editor-Integration)** - LSP server and editor plugins
 - **[Advanced Workflows](https://github.com/sysid/bkmr/wiki/Advanced-Workflows)** - Power user techniques
 

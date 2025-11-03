@@ -14,10 +14,12 @@ pub struct OpenAiEmbedding {
 
 impl Default for OpenAiEmbedding {
     fn default() -> Self {
-        Self {
-            url: "https://api.openai.com".to_string(),
-            model: "text-embedding-ada-002".to_string(),
-        }
+        let url = env::var("OPENAI_API_BASE")
+            .unwrap_or_else(|_| "https://api.openai.com".to_string());
+        let model = env::var("OPENAI_MODEL")
+            .unwrap_or_else(|_| "text-embedding-ada-002".to_string());
+
+        Self { url, model }
     }
 }
 
@@ -120,6 +122,87 @@ mod tests {
         // Restore API key if it existed
         if let Some(key) = api_key_backup {
             env::set_var("OPENAI_API_KEY", key);
+        }
+    }
+
+    #[test]
+    fn given_custom_base_url_when_default_then_uses_custom_url() {
+        let base_backup = env::var("OPENAI_API_BASE").ok();
+
+        env::set_var("OPENAI_API_BASE", "https://custom.api.com");
+        let openai = OpenAiEmbedding::default();
+
+        assert_eq!(openai.url, "https://custom.api.com");
+
+        // Restore or remove
+        match base_backup {
+            Some(val) => env::set_var("OPENAI_API_BASE", val),
+            None => env::remove_var("OPENAI_API_BASE"),
+        }
+    }
+
+    #[test]
+    fn given_custom_model_when_default_then_uses_custom_model() {
+        let model_backup = env::var("OPENAI_MODEL").ok();
+
+        env::set_var("OPENAI_MODEL", "text-embedding-3-large");
+        let openai = OpenAiEmbedding::default();
+
+        assert_eq!(openai.model, "text-embedding-3-large");
+
+        // Restore or remove
+        match model_backup {
+            Some(val) => env::set_var("OPENAI_MODEL", val),
+            None => env::remove_var("OPENAI_MODEL"),
+        }
+    }
+
+    #[test]
+    fn given_no_custom_config_when_default_then_uses_defaults() {
+        let base_backup = env::var("OPENAI_API_BASE").ok();
+        let model_backup = env::var("OPENAI_MODEL").ok();
+
+        env::remove_var("OPENAI_API_BASE");
+        env::remove_var("OPENAI_MODEL");
+
+        let openai = OpenAiEmbedding::default();
+
+        assert_eq!(openai.url, "https://api.openai.com");
+        assert_eq!(openai.model, "text-embedding-ada-002");
+
+        // Restore
+        if let Some(val) = base_backup {
+            env::set_var("OPENAI_API_BASE", val);
+        }
+        if let Some(val) = model_backup {
+            env::set_var("OPENAI_MODEL", val);
+        }
+    }
+
+    #[test]
+    fn given_new_constructor_when_explicit_values_then_overrides_env() {
+        let base_backup = env::var("OPENAI_API_BASE").ok();
+        let model_backup = env::var("OPENAI_MODEL").ok();
+
+        env::set_var("OPENAI_API_BASE", "https://env.api.com");
+        env::set_var("OPENAI_MODEL", "env-model");
+
+        let openai = OpenAiEmbedding::new(
+            "https://explicit.api.com".to_string(),
+            "explicit-model".to_string()
+        );
+
+        assert_eq!(openai.url, "https://explicit.api.com");
+        assert_eq!(openai.model, "explicit-model");
+
+        // Restore
+        match base_backup {
+            Some(val) => env::set_var("OPENAI_API_BASE", val),
+            None => env::remove_var("OPENAI_API_BASE"),
+        }
+        match model_backup {
+            Some(val) => env::set_var("OPENAI_MODEL", val),
+            None => env::remove_var("OPENAI_MODEL"),
         }
     }
 }
