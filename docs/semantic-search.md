@@ -8,8 +8,76 @@ Semantic search uses AI embeddings (vector representations of text) to capture t
 
 ## Requirements
 
-- OpenAI API key set as environment variable: `OPENAI_API_KEY`
+- API key set as environment variable: `OPENAI_API_KEY` (for your configured embeddings provider)
 - The `--openai` flag when running commands that use embeddings
+
+## Configuring Embedding Providers
+
+`bkmr` supports any OpenAI-compatible embeddings provider through both **configuration files** and **environment variables**. Configuration files provide production-ready, persistent settings, while environment variables allow for quick overrides and testing.
+
+### Configuration Priority
+
+Settings are loaded in this order (later sources override earlier ones):
+1. **Config file** (`~/.config/bkmr/config.toml`)
+2. **Environment variables** (`OPENAI_API_BASE`, `OPENAI_MODEL`) - override config file
+3. **Defaults** if neither is set
+
+### Using Configuration Files (Recommended)
+
+Add to your `~/.config/bkmr/config.toml`:
+
+```toml
+[embeddings_opts]
+api_base = "https://api.openai.com/v1"
+model = "text-embedding-3-small"
+```
+
+Generate a default config file:
+```bash
+bkmr --generate-config > ~/.config/bkmr/config.toml
+```
+
+### Using Environment Variables (Quick Testing)
+
+Environment variables override config file settings. By default, it uses OpenAI, but you can easily switch to other providers:
+
+### OpenAI (Default)
+```bash
+export OPENAI_API_KEY="sk-your-api-key"
+# Optional: Customize base URL and model
+export OPENAI_API_BASE="https://api.openai.com/v1"  # default
+export OPENAI_MODEL="text-embedding-3-small"  # default
+```
+
+### Ollama (Local Embeddings)
+```bash
+export OPENAI_API_BASE="http://localhost:11434/v1"
+export OPENAI_MODEL="nomic-embed-text"
+# No API key needed for localhost
+```
+
+### HuggingFace
+```bash
+export OPENAI_API_BASE="https://api-inference.huggingface.co/v1"
+export OPENAI_MODEL="sentence-transformers/all-MiniLM-L6-v2"
+export OPENAI_API_KEY="hf_your-api-key"
+```
+
+### Voyage AI
+```bash
+export OPENAI_API_BASE="https://api.voyageai.com/v1"
+export OPENAI_MODEL="voyage-2"
+export OPENAI_API_KEY="pa-your-api-key"
+```
+
+### Custom OpenAI-Compatible Endpoints
+```bash
+export OPENAI_API_BASE="https://your-custom-endpoint.com/v1"
+export OPENAI_MODEL="your-embedding-model"
+export OPENAI_API_KEY="your-api-key"
+```
+
+**Note:** The environment variable names use the `OPENAI_` prefix for backward compatibility, but work with any OpenAI-compatible provider. For backward compatibility, `OPENAI_API_URL` is also supported as an alias for `OPENAI_API_BASE`.
 
 ## Basic Usage
 
@@ -114,8 +182,10 @@ Semantic search transforms how developers access information:
 
 ## Technical Details
 
-- `bkmr` uses OpenAI's text-embedding-ada-002 model by default
-- Only portions of bookmarks marked as embeddable are sent to OpenAI for embedding generation
+- `bkmr` uses OpenAI's text-embedding-3-small model by default, but supports any OpenAI-compatible provider
+- You can customize the API endpoint and model via `OPENAI_API_BASE` and `OPENAI_MODEL` environment variables
+- Authentication is automatically detected based on the URL (Voyage AI uses X-Api-Key, localhost requires no auth, others use Bearer tokens)
+- Only portions of bookmarks marked as embeddable are sent to the embeddings API
 - Embeddings and content hashes are stored locally in your database
 - Similarity is calculated using cosine similarity between vector representations
 - File content is tracked using content hashes to minimize unnecessary API calls
@@ -137,11 +207,13 @@ Content that may not benefit as much:
 
 ## Privacy Considerations
 
-When using the OpenAI integration:
+When using embeddings providers:
 
-- Content from your bookmarks is sent to OpenAI's API for embedding generation
-- No content is stored by OpenAI, but it may be used to improve their services
-- If you have privacy concerns, consider carefully which bookmarks you mark as embeddable
+- Content from your bookmarks is sent to the configured embeddings API for vector generation
+- Privacy policies vary by provider (OpenAI, HuggingFace, Voyage AI, etc.)
+- For maximum privacy, consider using local providers like Ollama
+- If you have privacy concerns, carefully choose which bookmarks you mark as embeddable
+- Local providers like Ollama keep all data on your machine
 
 ## Combining with Template Interpolation
 

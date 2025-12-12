@@ -42,7 +42,7 @@ impl ServiceContainer {
     pub fn new(config: &Settings, openai: bool) -> ApplicationResult<Self> {
         // Base infrastructure
         let bookmark_repository = Self::create_repository(&config.db_url)?;
-        let embedder = Self::create_embedder(openai)?;
+        let embedder = Self::create_embedder(openai, config)?;
         let clipboard_service = Arc::new(ClipboardServiceImpl::new());
         let interpolation_service = Self::create_interpolation_service();
         let template_service = Self::create_template_service();
@@ -100,9 +100,13 @@ impl ServiceContainer {
         Ok(Arc::new(repository))
     }
     
-    fn create_embedder(openai: bool) -> ApplicationResult<Arc<dyn Embedder>> {
+    fn create_embedder(openai: bool, config: &Settings) -> ApplicationResult<Arc<dyn Embedder>> {
         if openai {
-            Ok(Arc::new(OpenAiEmbedding::default()))
+            // Use configuration from Settings (which includes config file + env overrides)
+            Ok(Arc::new(OpenAiEmbedding::from_config(
+                &config.embeddings_opts.api_base,
+                &config.embeddings_opts.model,
+            )))
         } else {
             Ok(Arc::new(DummyEmbedding))
         }
