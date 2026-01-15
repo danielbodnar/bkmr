@@ -53,7 +53,7 @@ pub fn get_known_providers() -> HashMap<&'static str, ProviderConfig> {
         "voyageai",
         ProviderConfig {
             name: "voyageai",
-            api_base: "https://api.voyageai.com/v1",
+            api_base: "https://api.voyageai.com",
             default_model: "voyage-3-large",
             auth_header: AuthHeaderType::ApiKey,
         },
