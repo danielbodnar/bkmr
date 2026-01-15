@@ -36,6 +36,10 @@ impl Default for OpenAiCompatibleEmbedding {
 impl OpenAiCompatibleEmbedding {
     /// Create a new embedding provider from environment variables
     pub fn from_env() -> Self {
+        // Read environment variables once
+        let api_base_override = env::var("OPENAI_API_BASE").ok();
+        let model_override = env::var("OPENAI_MODEL").ok();
+        
         // Check for provider name first
         let provider_name = env::var("OPENAI_PROVIDER")
             .ok()
@@ -43,12 +47,8 @@ impl OpenAiCompatibleEmbedding {
 
         if let Some(config) = get_provider(&provider_name) {
             // Use provider config as base, but allow overrides
-            let api_base = env::var("OPENAI_API_BASE")
-                .ok()
-                .unwrap_or_else(|| config.api_base.to_string());
-            let model = env::var("OPENAI_MODEL")
-                .ok()
-                .unwrap_or_else(|| config.default_model.to_string());
+            let api_base = api_base_override.unwrap_or_else(|| config.api_base.to_string());
+            let model = model_override.unwrap_or_else(|| config.default_model.to_string());
 
             Self {
                 api_base,
@@ -57,12 +57,8 @@ impl OpenAiCompatibleEmbedding {
             }
         } else {
             // Fallback to manual configuration
-            let api_base = env::var("OPENAI_API_BASE")
-                .ok()
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-            let model = env::var("OPENAI_MODEL")
-                .ok()
-                .unwrap_or_else(|| "text-embedding-ada-002".to_string());
+            let api_base = api_base_override.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            let model = model_override.unwrap_or_else(|| "text-embedding-ada-002".to_string());
 
             Self {
                 api_base,
@@ -165,6 +161,7 @@ impl Embedder for OpenAiCompatibleEmbedding {
 mod tests {
     use super::*;
     use crate::util::testing::init_test_env;
+    use serial_test::serial;
 
     #[test]
     fn given_text_input_when_create_embedding_then_returns_vector() {
@@ -184,6 +181,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn given_missing_api_key_when_create_embedding_then_returns_error() {
         // Temporarily unset the API key if it exists
         let api_key_backup = env::var("OPENAI_API_KEY").ok();
@@ -217,6 +215,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_env_override() {
         // Save current env
         let saved_provider = env::var("OPENAI_PROVIDER").ok();

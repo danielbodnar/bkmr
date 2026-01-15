@@ -893,7 +893,7 @@ pub fn info(cli: Cli, services: &ServiceContainer, settings: &Settings) -> CliRe
         let embedder_type = if services.embedder.as_any().type_id()
             == std::any::TypeId::of::<DummyEmbedding>()
         {
-            "DummyEmbedding (embeddings disabled)"
+            "DummyEmbedding (embeddings disabled)".to_string()
         } else if services.embedder.as_any().type_id()
             == std::any::TypeId::of::<OpenAiCompatibleEmbedding>()
         {
@@ -902,9 +902,9 @@ pub fn info(cli: Cli, services: &ServiceContainer, settings: &Settings) -> CliRe
                 .ok()
                 .map(|p| format!(" [provider: {}]", p))
                 .unwrap_or_default();
-            format!("OpenAI-compatible embeddings (enabled){}", provider_info).leak()
+            format!("OpenAI-compatible embeddings (enabled){}", provider_info)
         } else {
-            "Unknown embedder"
+            "Unknown embedder".to_string()
         };
         println!("  Embedder: {}", embedder_type);
 

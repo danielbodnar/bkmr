@@ -6,6 +6,19 @@ use std::env;
 use tracing::{debug, instrument};
 
 /// Implementation using Voyage AI's embedding API
+/// 
+/// # Deprecated
+/// This provider is kept for backward compatibility only.
+/// New code should use `OpenAiCompatibleEmbedding` with `OPENAI_PROVIDER=voyageai`:
+/// 
+/// ```bash
+/// export OPENAI_API_KEY="pa-..."
+/// export OPENAI_PROVIDER="voyageai"
+/// ```
+#[deprecated(
+    since = "6.3.0",
+    note = "Use OpenAiCompatibleEmbedding with OPENAI_PROVIDER=voyageai instead"
+)]
 #[derive(Debug, Clone)]
 pub struct VoyageAiEmbedding {
     url: String,
@@ -85,8 +98,10 @@ impl VoyageAiEmbedding {
 mod tests {
     use super::*;
     use crate::util::testing::init_test_env;
+    use serial_test::serial;
 
     #[test]
+    #[allow(deprecated)]
     fn given_text_input_when_create_embedding_then_returns_vector() {
         let _ = init_test_env();
         if env::var("VOYAGE_API_KEY").is_err() {
@@ -103,6 +118,8 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    #[allow(deprecated)]
     fn given_missing_api_key_when_create_embedding_then_returns_error() {
         // Temporarily unset the API key if it exists
         let api_key_backup = env::var("VOYAGE_API_KEY").ok();
