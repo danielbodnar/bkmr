@@ -39,10 +39,10 @@ fn main() {
             Settings::default()
         });
     
-    // Note: OpenAI override from CLI flag will be handled in service container
-    // when the embedder selection is properly implemented
+    // Note: Embeddings configuration is done via environment variables
+    // OPENAI_API_KEY (required), OPENAI_PROVIDER, OPENAI_API_BASE, OPENAI_MODEL
     if cli.openai {
-        debug!("OpenAI embeddings requested via CLI flag");
+        debug!("Embeddings enabled via --openai flag");
     }
 
     // Handle all database-independent operations first
