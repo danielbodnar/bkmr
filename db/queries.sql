@@ -1,12 +1,23 @@
 -- name: get_all
-select *
-from bookmarks;
+-- select count(*)
+select count(*)
+from bookmarks
+where embeddable = 1;
 
 select *
 from bookmarks_fts
 where bookmarks_fts match 'xxx' -- :fts_query
 order by rank;
 
+
+--- delete embeddings
+update bookmarks
+set embedding = NULL
+where embedding IS NOT NULL;
+
+update bookmarks
+set content_hash = NULL
+where content_hash IS NOT NULL;
 
 /*
  For tracking the database version, I use the built in user-version variable that sqlite provides
@@ -48,3 +59,32 @@ ORDER BY tags;
 
  SELECT 1 as diesel_exists
  FROM sqlite_master WHERE type='table' AND name='__diesel_schema_migrations';
+
+-- name: get_embeddable_imported
+-- Use instr() for exact token matching; LIKE treats '_' as a wildcard.
+select *
+from bookmarks
+where embeddable = 1
+  and instr(tags, ',_imported_,') > 0;
+
+-- name: delete_embeddable_imported
+delete from bookmarks
+where embeddable = 1
+  and instr(tags, ',_imported_,') > 0;
+
+-- name: mark_snip_non_embeddable
+-- UPDATE bookmarks SET embeddable = 0 WHERE tags LIKE '%_snip_%';
+UPDATE bookmarks SET embeddable = 1 WHERE tags LIKE '%_mem_%';
+
+select *
+from bookmarks
+where tags LIKE '%_shell_%'
+and embeddable = 1;
+
+
+-- This query is for finding bookmarks that have tags but none of the tags are "mem", "snip", or "shell".
+SELECT count(*)
+FROM bookmarks WHERE tags NOT GLOB '*,_*_,*';
+
+
+

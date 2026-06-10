@@ -1,0 +1,410 @@
+---
+name: bkmr-memory
+description: >
+  Primary memory system — supersedes built-in file-based memory (MEMORY.md / memory/ directory).
+  All memory reads and writes go through bkmr, not the filesystem. Invoke for ANY of:
+  (1) User asks about memories, past sessions, what you remember — "what do you know about X".
+  (2) User asks to remember or save something for future sessions.
+  (3) Starting a new task — check for relevant context, gotchas, or preferences.
+  (4) Encountered a bug or surprise — check if seen before.
+  (5) Making an architectural or tooling decision — check for prior decisions.
+  (6) End of task — persist non-trivial learnings.
+  When in doubt, invoke — a quick bkmr query costs almost nothing.
+  DO NOT use file-based memory — use bkmr instead.
+---
+
+# bkmr-memory — Persistent Agent Memory
+
+bkmr is a CLI bookmark manager with SQLite FTS5 and local semantic search (fastembed/ONNX).
+Bookmarks tagged with the `_mem_` system tag serve as persistent agent memory that survives
+across sessions. This skill defines how to read and write that memory effectively.
+
+## Mandatory Tag Rules
+
+Every interaction with bkmr memory requires specific tags. These are non-negotiable — without
+them, memories are unfindable or uncategorized noise.
+
+**READING — every query must include `-t _mem_`:**
+```bash
+bkmr hsearch "query" -t _mem_ --json --np       # default: hybrid (FTS + semantic)
+```
+The `-t _mem_` flag scopes results to agent memories only. Without it, you search the entire
+bookmark database (personal bookmarks, snippets, shells, etc.) — guaranteed noise.
+
+Always use `hsearch` as your search command. It combines FTS and semantic ranking via
+Reciprocal Rank Fusion, so it handles both keyword and conceptual queries well.
+Only fall back to `search` (FTS-only) when you specifically need exact phrase matching
+(`'"JWT expiry"'`), boolean logic (`'auth NOT oauth'`), or tag-only browsing with no
+query text (`-t _mem_ -n gotcha`).
+
+**WRITING — every memory must use `-t mem` AND exactly one classification tag:**
+```bash
+bkmr add "content" "CLASSIFICATION,topic1,topic2" --title "Title" -t mem --no-web
+#                    ^^^^^^^^^^^^^^
+#                    REQUIRED: exactly one of: fact, procedure, preference, episode, gotcha
+```
+
+The five classification tags:
+
+| Tag | Use for | Example |
+|-----|---------|---------|
+| `fact` | Infrastructure truths, config, architecture | "Prod DB is PostgreSQL 15 on port 5433" |
+| `procedure` | How-to steps, deployment, workarounds | "Deploy: make deploy-staging, then verify health" |
+| `preference` | User conventions, tool choices, style | "User prefers pytest, uses fixtures not setUp" |
+| `episode` | Debugging narratives, surprising discoveries | "2026-04-04: JWT expiry was 5s not 5m" |
+| `gotcha` | Non-obvious pitfalls, things that broke | "CI silently succeeds when registry is down" |
+
+A memory without a classification tag cannot be filtered by category — it becomes a second-class
+citizen in search results and breaks the taxonomy that makes memory useful.
+
+## Optional Tag Rules
+
+1. You may use topic tags for additional classification (e.g., `database`, `postgres`, `deployment`, `auth`).
+2. To limit scope to a project, you may use a project tag. MANDATORY STRUCTURE for project tag: `project:foo`.
+3. **No redundant tags.** If you use a project tag `project:foo`, do NOT also add a bare `foo` tag —
+   `project:foo` already carries the project identity. Same rule for any topic expressed as both a
+   namespaced and bare tag (e.g., don't pair `lang:python` with `python`). Pick the more specific
+   form and drop the other. Redundant tags dilute embedding signal and waste the 2–4 topic-tag budget.
+   Topic tags should name the *subject matter* (e.g., `fzf`, `skim`, `bash`), not repeat the project.
+
+---
+
+## How It Works
+
+A memory bookmark has three meaningful fields:
+
+| Field | Purpose | Limit           |
+|-------|---------|-----------------|
+| `url` | **The memory content** (what you're storing) | max. 500 tokens |
+| `title` | A concise, searchable title | Short phrase    |
+| `tags` | Classification + topic tags | Comma-separated |
+
+**The `url` field IS the memory.** This is the first positional argument to `bkmr add`. Do NOT
+put memory content in the `-d` (description) field — that field is not used for embeddings or
+the memory display action. If you put content in description instead of url, the memory becomes
+unsearchable and displays as empty. Keep memories concise.
+
+Embeddings for semantic search are computed from **content (url) + title + visible tags** (system
+tags like `_mem_` are excluded from embeddings). This means your title and tags directly affect
+how well the memory is found — make them descriptive.
+
+---
+
+## 1. Querying Memories (READ)
+
+### When to Query
+
+- **At every task start** — before doing any work, check for relevant memories
+- **Before architectural decisions** — check for gotchas, preferences, procedures
+- **When something feels familiar** — "didn't we solve this before?"
+- **When encountering a bug or surprise** — check for past episodes or gotchas
+
+### How to Query
+
+Use **one** `hsearch` call per lookup. Do not run both `hsearch` and `search` for the same
+query — the results overlap heavily and waste context.
+
+```bash
+# Standard query — handles keywords and conceptual matches
+bkmr hsearch "database connection pooling" -t _mem_ --json --np
+
+# With a classification filter — narrows results to a category
+bkmr hsearch "deployment steps" -t _mem_ -n procedure --json --np
+
+# Limit results when you only need top matches
+bkmr hsearch "auth middleware" -t _mem_ --json --np -l 5
+```
+
+**FTS-only fallback** — use `search` instead of `hsearch` only for these three cases:
+
+```bash
+# 1. Exact phrase match (quotes inside the query)
+bkmr search '"JWT expiry"' -t _mem_ --json --np
+
+# 2. Boolean logic (AND/OR/NOT)
+bkmr search 'auth NOT oauth' -t _mem_ --json --np
+
+# 3. Tag-only browse with no query text
+bkmr search -t _mem_ -n gotcha --json --np
+```
+
+### Reading the Results
+
+`hsearch --json` returns:
+```json
+[
+  {
+    "id": 42,
+    "url": "The auth service uses JWT with 24h expiry. Refresh tokens are stored in Redis, not the DB.",
+    "title": "Auth token architecture",
+    "tags": ",_mem_,fact,auth,",
+    "rrf_score": 0.032
+  }
+]
+```
+
+The `url` field contains the actual memory content. The `rrf_score` indicates relevance —
+higher is better. Use `id` to reference a specific memory for updates.
+
+To view a single memory in detail: `bkmr show 42 --json`
+
+Note: `search --json` returns a slightly different shape (tags as array, includes
+`access_count`/`created_at`/`updated_at` instead of `rrf_score`), but the key fields
+(`id`, `url`, `title`, `tags`) are the same.
+
+### Query Patterns by Situation
+
+| Situation | Query |
+|-----------|-------|
+| Starting work on a project | `bkmr hsearch "project-name overview" -t _mem_ --json --np -l 10` |
+| Before changing architecture | `bkmr hsearch "architecture decisions" -t _mem_ -n gotcha --json --np` |
+| Checking user preferences | `bkmr hsearch "conventions style" -t _mem_ -n preference --json --np` |
+| Recalling a past debugging session | `bkmr hsearch "debugged auth issue" -t _mem_ -n episode --json --np` |
+| Looking up a deployment procedure | `bkmr hsearch "deploy staging" -t _mem_ -n procedure --json --np` |
+| Browse all gotchas (no query) | `bkmr search -t _mem_ -n gotcha --json --np` |
+
+---
+
+## 2. Storing Memories (WRITE)
+
+### When to Store
+
+Before completing any task, ask yourself:
+
+> Did I learn anything non-trivial about this project, codebase, user preferences, or environment
+> that would be valuable in a future session?
+
+**Store it if** the insight is:
+- Not derivable from reading source code or git history
+- Not already in documentation (README, CLAUDE.md, comments)
+- Likely to save time or prevent mistakes in a future session
+- A user preference, convention, or decision rationale
+
+**Do NOT store:**
+- Code snippets (reference the file path instead)
+- Anything already in CLAUDE.md or project docs
+- Git history facts (`git log` is authoritative)
+- Obvious things ("this project uses Rust" — the Cargo.toml says that)
+- Temporary state or in-progress work details
+- Full file contents or large artifacts
+- **What you changed** — file lists, renames, refactoring summaries, documentation updates.
+  All of this is recoverable from `git log`, `git diff`, and reading the code.
+  A memory that says "Updated files X, Y, Z" or "Renamed A to B" is pure noise.
+- **Anything derivable by reading the codebase** — project structure, which classes exist,
+  what frameworks are used, how modules are wired together. The code is the source of truth;
+  re-reading it is cheap. Only store *interpretations* that aren't obvious from the code
+  (e.g., "X looks wrong but is intentional because of Y constraint").
+
+### Memory Taxonomy
+
+Every memory gets exactly **one** classification tag:
+
+| Tag | Use for | Content style |
+|-----|---------|---------------|
+| `fact` | Truths about infrastructure, config, architecture | Short declarative statement |
+| `procedure` | How-to sequences, deployment steps, workarounds | Numbered steps or command sequence |
+| `preference` | User conventions, tool choices, style decisions | "User prefers X over Y because Z" |
+| `episode` | Debugging narratives, surprising discoveries, non-obvious decisions | "On DATE, X failed because Y (non-obvious). Fix was Z." |
+| `gotcha` | Non-obvious pitfalls, footguns, things that broke before | "X looks like it should work but fails because Y" |
+
+### How to Store
+
+```bash
+bkmr add "CONTENT" "CLASSIFICATION,TOPIC_TAGS" --title "TITLE" -t mem --no-web
+```
+
+**Concrete examples:**
+
+```bash
+# Fact
+bkmr add \
+  "Production PostgreSQL 15 runs on db-prod-1.internal:5433. Read replicas on ports 5434-5436. Connection pool max is 50." \
+  "fact,infrastructure,database" \
+  --title "Production database connection details" \
+  -t mem --no-web
+
+# Procedure
+bkmr add \
+  "Deploy to staging: 1) Run 'make deploy-staging' 2) Wait for health check at /api/health 3) Verify logs in Grafana dashboard 'staging-deploys' 4) Run smoke tests with 'make test-smoke'" \
+  "procedure,deployment,staging" \
+  --title "Staging deployment procedure" \
+  -t mem --no-web
+
+# Preference
+bkmr add \
+  "User prefers pytest over unittest. Test files go in tests/ not __tests__/. Always use fixtures, never setUp/tearDown classes. Parametrize over duplicate test functions." \
+  "preference,testing,python" \
+  --title "Python testing conventions" \
+  -t mem --no-web
+
+# Episode
+bkmr add \
+  "2026-04-04: Debugged auth middleware timeout. Root cause: JWT expiry was set to 5 seconds (not 5 minutes) in config/auth.yml. The 's' suffix was interpreted as seconds, not minutes. Fix: changed '5s' to '5m'. See commit abc123." \
+  "episode,auth,debugging" \
+  --title "Auth middleware JWT expiry bug — 5s vs 5m" \
+  -t mem --no-web
+
+# Gotcha
+bkmr add \
+  "bkmr integration tests MUST run single-threaded (--test-threads=1) because they share a SQLite DB file. Parallel execution causes SQLITE_BUSY errors that look like test failures but are actually lock contention." \
+  "project:bkmr,gotcha,testing" \
+  --title "bkmr tests require single-threaded execution" \
+  -t mem --no-web
+```
+
+### Content Guidelines
+
+Since embeddings are built from content + title + tags, write memories that are **search-friendly**:
+
+- **Title**: A specific, descriptive phrase — not "note" or "thing I learned"
+- **Content**: Lead with the key fact. Add context after. Use concrete names, not pronouns.
+- **Tags**: Include topic keywords beyond the classification (e.g., `fact,database,postgres,production`)
+- **References over copies**: Instead of pasting code, write `"The retry logic in src/http/client.rs:45-60 uses exponential backoff with jitter. Max 3 retries, base delay 100ms."`
+
+### Deduplication (Critical)
+
+Before storing any memory, check if a similar one already exists:
+
+```bash
+# Search for similar memories
+bkmr hsearch "your proposed memory content keywords" -t _mem_ --json --np -l 3
+```
+
+**Decision logic:**
+- **No match** → create new memory
+- **Outdated match** → update content with `bkmr update --url "..." <id>`
+- **Same content exists** → skip, don't duplicate
+- **Related but adds info** → update to merge both facts
+
+### Update Examples
+
+**Scenario 1: Outdated fact** — port changed from 5432 to 5433
+
+```bash
+# Step 1: Search finds existing memory
+bkmr hsearch "production database" -t _mem_ -n fact --json --np -l 3
+# Returns: id=42, url="Prod DB on port 5432", title="Production database config"
+
+# Step 2: Update the content (port changed)
+bkmr update --url "Production PostgreSQL 15 on port 5433. Pool max 50." 42
+```
+
+**Scenario 2: Enriching a memory** — adding new info to existing memory
+
+```bash
+# Step 1: Search finds a thin memory
+bkmr hsearch "auth service" -t _mem_ --json --np -l 3
+# Returns: id=87, url="Auth uses JWT with 24h expiry", title="Auth token config"
+
+# Step 2: Enrich with more detail
+bkmr update --url "Auth uses JWT with 24h expiry. Refresh tokens in Redis (not DB). Token rotation enabled. JWKS endpoint at /api/.well-known/jwks.json." 87
+```
+
+**Scenario 3: Fixing a bad title** — improving searchability
+
+```bash
+bkmr update --title "Auth service: JWT expiry, refresh tokens, JWKS endpoint" 87
+```
+
+**Scenario 4: Reclassifying a memory** — was stored as fact, should be gotcha
+
+```bash
+# Replace all tags (must include _mem_ and new classification)
+bkmr update 87 -t "_mem_,gotcha,auth,jwt" -f
+```
+
+**Scenario 5: Adding topic tags** — make memory more discoverable
+
+```bash
+# Additive: keep existing tags, add new ones
+bkmr update 87 -t redis,security
+```
+
+---
+
+## 3. Decision Tree: Should I Store This?
+
+```
+Did I learn something new?
+├── No → Don't store
+└── Yes
+    ├── Is it in the source code, docs, git history, or derivable by reading the codebase?
+    │   ├── Yes → Don't store (code is source of truth; git log recovers changes)
+    │   └── No
+    │       ├── Is it trivial or obvious?
+    │       │   ├── Yes → Don't store
+    │       │   └── No
+    │       │       ├── Would a future session benefit from knowing this?
+    │       │       │   ├── No → Don't store
+    │       │       │   └── Yes
+    │       │       │       ├── Could I re-derive this by reading code + git log in < 5 min?
+    │       │       │       │   ├── Yes → Don't store (re-derivation is cheaper than stale memory)
+    │       │       │       │   └── No
+    │       │       │       │       ├── Does a similar memory already exist?
+    │       │       │       │       │   ├── Yes → Update existing (bkmr update --url "..." <id>)
+    │       │       │       │       │   └── No → Create new memory
+    │       │       │       │       └── Done
+    │       │       │       └── Done
+    │       │       └── Done
+    │       └── Done
+    └── Done
+```
+
+---
+
+## 4. Anti-Patterns
+
+| Anti-pattern | Why it's bad | Do this instead |
+|-------------|-------------|----------------|
+| Putting content in `-d` instead of url | Breaks embeddings AND memory display | First positional arg = content |
+| Missing `-t mem` flag | Memory has no `_mem_` tag, invisible to queries | Always use `-t mem` when adding |
+| Missing classification tag | Unfilterable, breaks taxonomy | Always include exactly one of: fact/procedure/preference/episode/gotcha |
+| Missing `-t _mem_` on queries | Searches entire DB, returns noise | Every read query needs `-t _mem_` |
+| Storing full file contents | Exceeds token limit, stale immediately | Store summary + file path reference |
+| Storing git history | `git log` is authoritative and current | Only store *interpretations* ("we chose X because Y") |
+| Storing TODO items | Ephemeral, belongs in issue tracker | Store the *decision* or *reason*, not the task |
+| Vague titles like "note" | Unsearchable, useless embeddings | Use specific descriptive titles |
+| Duplicate memories | Noise drowns signal | Always dedup before writing |
+| Storing things from CLAUDE.md | Already in context every session | Only store what's NOT in docs |
+| Over-tagging | Dilutes search relevance | 1 classification + 2-4 topic tags max |
+| Redundant project + bare tag (`project:bkmr` AND `bkmr`) | Namespaced tag already carries the identity; the bare tag is noise | Keep only `project:bkmr`; use remaining topic tags for subject matter (`fzf`, `bash`, …) |
+| Storing every session | Most sessions are routine | Only store sessions with non-obvious learnings |
+| Storing what you changed | Git log is authoritative; file lists, renames, refactorings are noise | Store the *insight* or *decision rationale*, not the change list |
+| Storing codebase structure | Reading the code is cheap; structure changes with every PR | Only store non-obvious *interpretations* (e.g., "X exists because of Y constraint") |
+
+---
+
+## 5. Session Workflow (MANDATORY)
+
+These steps are NON-OPTIONAL. You MUST execute actual bkmr commands (not just read this
+section).
+
+### At Session Start (BEFORE any work)
+Query for relevant memories before writing code, making plans, or answering questions.
+A single well-crafted hsearch is usually enough — don't run multiple overlapping queries.
+```bash
+# Primary query — combine project name + task keywords for best recall
+bkmr hsearch "<project-name> <current-task-keywords>" -t _mem_ --json --np -l 10
+
+# Only add a second query if the task involves a specific risk area
+bkmr hsearch "<area-of-work>" -t _mem_ -n gotcha --json --np
+```
+
+### During Work (BEFORE decisions, AT strange bugs)
+```bash
+# Before architectural decisions, check for prior decisions/gotchas
+bkmr hsearch "<decision topic>" -t _mem_ --json --np
+```
+
+### At Task End or Session End (BEFORE signing off)
+You MUST evaluate whether anything learned warrants storing. Run the decision tree
+from section 3. If something qualifies, dedup and store:
+```bash
+# 1. Reflect: did I learn anything non-trivial that isn't in code/docs/git?
+# 2. If yes, dedup check:
+bkmr hsearch "<summary of what I learned>" -t _mem_ --json --np -l 3
+# 3. If no duplicate, store it:
+bkmr add "concise memory content" "classification,topic1,topic2" \
+  --title "Descriptive title" -t mem --no-web
+# 4. If nothing worth storing, that's fine — but you must have evaluated.
+```

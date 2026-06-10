@@ -1,13 +1,23 @@
 // bkmr/src/domain/bookmark.rs
-use crate::domain::embedding::{serialize_embedding, Embedder};
 use crate::domain::error::{DomainError, DomainResult};
 use crate::domain::system_tag::SystemTag;
 use crate::domain::tag::Tag;
-use crate::util::helper::calc_content_hash;
 use chrono::{DateTime, Utc};
 use derive_builder::Builder;
 use std::collections::HashSet;
 use std::fmt;
+
+/// Build the text content used for embedding generation.
+/// Filters out system tags and constructs: `"{tags}{title} -- {content}{tags}"`
+pub fn build_embedding_content(tags: &HashSet<Tag>, title: &str, content: &str) -> String {
+    let visible_tags: HashSet<_> = tags
+        .iter()
+        .filter(|tag| !tag.value().starts_with('_') && !tag.value().ends_with('_'))
+        .cloned()
+        .collect();
+    let tags_str = Tag::format_tags(&visible_tags);
+    format!("{}{} -- {}{}", tags_str, title, content, tags_str)
+}
 
 /// Represents a bookmark domain entity
 #[derive(Builder, Clone, PartialEq)]
@@ -23,7 +33,7 @@ pub struct Bookmark {
     pub updated_at: DateTime<Utc>,
     pub embedding: Option<Vec<u8>>,
     pub content_hash: Option<Vec<u8>>,
-    #[builder(default = "false")]
+    #[builder(default = "true")]
     pub embeddable: bool,
     #[builder(default)]
     pub file_path: Option<String>,
@@ -33,6 +43,8 @@ pub struct Bookmark {
     pub file_hash: Option<String>,
     #[builder(default)]
     pub opener: Option<String>,
+    #[builder(default)]
+    pub accessed_at: Option<DateTime<Utc>>,
 }
 
 /// Methods for the Bookmark entity
@@ -46,13 +58,12 @@ impl Bookmark {
         title: S,
         description: S,
         tags: HashSet<Tag>,
-        embedder: &dyn Embedder,
     ) -> DomainResult<Self> {
         let url_str = url.as_ref();
         let now = Utc::now();
 
         // Create bookmark instance first to use get_content_for_embedding
-        let mut bookmark = Self {
+        let bookmark = Self {
             id: None,
             url: url_str.to_string(),
             title: title.as_ref().to_string(),
@@ -63,27 +74,15 @@ impl Bookmark {
             updated_at: now,
             embedding: None,
             content_hash: None,
-            embeddable: false, // Default to false
+            embeddable: true, // Default to true — all new bookmarks participate in semantic search
             file_path: None,
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
-        // Get content for embedding using the structured method
-        let content = bookmark.get_content_for_embedding();
-
-        let embedding_result = embedder
-            .embed(&content)?
-            .map(serialize_embedding)
-            .transpose()?;
-
-        // Only set content_hash if an embedding is created
-        if embedding_result.is_some() {
-            bookmark.embedding = embedding_result;
-            bookmark.content_hash = Some(calc_content_hash(&content));
-        }
-
+        Self::validate_single_system_tag(&bookmark.tags)?;
         Ok(bookmark)
     }
 
@@ -104,6 +103,7 @@ impl Bookmark {
         file_mtime: Option<i32>,
         file_hash: Option<String>,
         opener: Option<String>,
+        accessed_at: Option<DateTime<Utc>>,
     ) -> DomainResult<Self> {
         let tags = Tag::parse_tags(tag_string)?;
 
@@ -123,6 +123,7 @@ impl Bookmark {
             file_mtime,
             file_hash,
             opener,
+            accessed_at,
         })
     }
 
@@ -131,9 +132,28 @@ impl Bookmark {
         self.embeddable = embeddable;
         self.updated_at = Utc::now();
     }
+    /// Validate that at most one known system tag is present in a tag set.
+    fn validate_single_system_tag(tags: &HashSet<Tag>) -> DomainResult<()> {
+        let system_tags: Vec<_> = tags.iter().filter(|t| t.is_known_system_tag()).collect();
+        if system_tags.len() > 1 {
+            let names: Vec<_> = system_tags.iter().map(|t| t.value().to_string()).collect();
+            return Err(DomainError::TagOperationFailed(format!(
+                "Bookmark may have at most one system tag, found: {}",
+                names.join(", ")
+            )));
+        }
+        Ok(())
+    }
+
     /// Add a tag to the bookmark
     pub fn add_tag(&mut self, tag: Tag) -> DomainResult<()> {
-        self.tags.insert(tag);
+        let was_new = self.tags.insert(tag.clone());
+        if was_new {
+            if let Err(e) = Self::validate_single_system_tag(&self.tags) {
+                self.tags.remove(&tag);
+                return Err(e);
+            }
+        }
         self.updated_at = Utc::now();
         Ok(())
     }
@@ -153,15 +173,16 @@ impl Bookmark {
 
     /// Set all tags at once (replacing existing tags)
     pub fn set_tags(&mut self, tags: HashSet<Tag>) -> DomainResult<()> {
+        Self::validate_single_system_tag(&tags)?;
         self.tags = tags;
         self.updated_at = Utc::now();
         Ok(())
     }
 
-    /// Record access to the bookmark
+    /// Record access to the bookmark (does not change updated_at)
     pub fn record_access(&mut self) {
         self.access_count += 1;
-        self.updated_at = Utc::now();
+        self.accessed_at = Some(Utc::now());
     }
 
     /// Update bookmark information
@@ -176,28 +197,31 @@ impl Bookmark {
         Tag::format_tags(&self.tags)
     }
 
-    /// Get the content for embedding generation
-    /// url is too noisy, so we don't include it
+    /// Build the text string used for embedding generation, dispatched by system tag.
+    ///
+    /// For content-bearing types (_snip_, _shell_, _md_, _env_, _imported_, _mem_), the
+    /// actual content lives in `self.url`. For URI bookmarks (no system tag), the url is
+    /// a link and the meaningful text is in `self.description`.
+    ///
+    /// The result is passed to `build_embedding_content()` which prepends tags and title.
     pub fn get_content_for_embedding(&self) -> String {
-        let visible_tags = self.get_visible_tags();
-
-        let tags_str = Tag::format_tags(&visible_tags);
-        // let normalized_url = self.url.replace('\n', " ").replace('\r', "");
-        format!(
-            "{}{} -- {}{}",
-            tags_str, self.title, self.description, tags_str
-        )
-    }
-
-    fn get_visible_tags(&self) -> HashSet<Tag> {
-        // Filter out system tags (starting or ending with underscore)
-        let visible_tags: HashSet<_> = self
-            .tags
-            .iter()
-            .filter(|tag| !tag.value().starts_with('_') && !tag.value().ends_with('_'))
-            .cloned()
-            .collect();
-        visible_tags
+        let content = if self.is_snippet() {
+            &self.url // code snippet
+        } else if self.is_system_tag(SystemTag::Shell) {
+            &self.url // shell script
+        } else if self.is_system_tag(SystemTag::Markdown) {
+            &self.url // markdown document
+        } else if self.is_system_tag(SystemTag::Env) {
+            &self.url // environment variables
+        } else if self.is_system_tag(SystemTag::Text) {
+            &self.url // imported text content
+        } else if self.is_system_tag(SystemTag::Memory) {
+            &self.url // agent memory content
+        } else {
+            // URI bookmarks and unknown types: url is a link, description has the content
+            &self.description
+        };
+        build_embedding_content(&self.tags, &self.title, content)
     }
 
     /// Check if the bookmark matches all given tags
@@ -306,6 +330,13 @@ impl Bookmark {
             .any(|tag| tag.is_system_tag_of(SystemTag::Env))
     }
 
+    /// Check if this bookmark is an agent memory
+    pub fn is_memory(&self) -> bool {
+        self.tags
+            .iter()
+            .any(|tag| tag.is_system_tag_of(SystemTag::Memory))
+    }
+
     /// Get the appropriate content based on bookmark type
     pub fn get_action_content(&self) -> &str {
         if self.is_snippet() {
@@ -343,6 +374,7 @@ impl fmt::Debug for Bookmark {
             .field("embedding", &self.embedding.as_ref().map(|_| "[...]"))
             .field("content_hash", &self.content_hash)
             .field("embeddable", &self.embeddable)
+            .field("accessed_at", &self.accessed_at)
             .finish()
     }
 }
@@ -363,7 +395,6 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -386,7 +417,6 @@ mod tests {
             "Shell Command",
             "A shell command",
             tags.clone(),
-            &crate::infrastructure::embeddings::DummyEmbedding,
         );
         assert!(shell_url.is_ok());
 
@@ -396,7 +426,6 @@ mod tests {
             "File Path",
             "A file path",
             tags.clone(),
-            &crate::infrastructure::embeddings::DummyEmbedding,
         );
         assert!(file_url.is_ok());
 
@@ -406,7 +435,6 @@ mod tests {
             "Home Path",
             "A path in home directory",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         );
         assert!(home_url.is_ok());
     }
@@ -422,7 +450,6 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -452,7 +479,6 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -467,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn given_bookmark_when_record_access_then_increments_count() {
+    fn given_bookmark_when_record_access_then_increments_count_and_sets_accessed_at() {
         let _ = init_test_env();
         let mut tags = HashSet::new();
         tags.insert(Tag::new("test").unwrap());
@@ -477,17 +503,21 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
         assert_eq!(bookmark.access_count, 0);
+        assert!(bookmark.accessed_at.is_none());
+        let updated_at_before = bookmark.updated_at;
 
         bookmark.record_access();
         assert_eq!(bookmark.access_count, 1);
+        assert!(bookmark.accessed_at.is_some());
+        assert_eq!(bookmark.updated_at, updated_at_before, "record_access must not change updated_at");
 
         bookmark.record_access();
         assert_eq!(bookmark.access_count, 2);
+        assert_eq!(bookmark.updated_at, updated_at_before, "record_access must not change updated_at");
     }
 
     #[test]
@@ -502,7 +532,6 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -522,7 +551,6 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -531,6 +559,115 @@ mod tests {
         assert!(!content.contains("_system"));
         assert!(content.contains("Example Site"));
         assert!(content.contains("An example website"));
+    }
+
+    #[test]
+    fn given_snippet_when_get_embedding_content_then_uses_url_as_content() {
+        let _ = init_test_env();
+        let mut tags = HashSet::new();
+        tags.insert(Tag::new("sql").unwrap());
+        tags.insert(Tag::new("_snip_").unwrap());
+
+        let bookmark = Bookmark::new(
+            "SELECT * FROM users WHERE active = true", // url = the snippet code
+            "User Query",                               // title
+            "Finds active users",                       // description (should NOT be embedded)
+            tags,
+        )
+        .unwrap();
+
+        let content = bookmark.get_content_for_embedding();
+        assert!(
+            content.contains("SELECT * FROM users"),
+            "should embed url (the snippet code)"
+        );
+        assert!(
+            !content.contains("Finds active users"),
+            "should NOT embed description"
+        );
+        assert!(content.contains("User Query"), "should embed title");
+        assert!(content.contains("sql"), "should embed visible tags");
+        assert!(!content.contains("_snip_"), "should NOT embed system tags");
+    }
+
+    #[test]
+    fn given_shell_bookmark_when_get_embedding_content_then_uses_url_as_content() {
+        let _ = init_test_env();
+        let mut tags = HashSet::new();
+        tags.insert(Tag::new("utils").unwrap());
+        tags.insert(Tag::new("_shell_").unwrap());
+
+        let bookmark = Bookmark::new(
+            "#!/bin/bash\necho 'hello'", // url = the shell script
+            "Greeting Script",            // title
+            "",                           // description empty (typical for shell)
+            tags,
+        )
+        .unwrap();
+
+        let content = bookmark.get_content_for_embedding();
+        assert!(
+            content.contains("#!/bin/bash"),
+            "should embed url (the shell script)"
+        );
+        assert!(
+            content.contains("Greeting Script"),
+            "should embed title"
+        );
+    }
+
+    #[test]
+    fn given_uri_bookmark_when_get_embedding_content_then_uses_description() {
+        let _ = init_test_env();
+        let mut tags = HashSet::new();
+        tags.insert(Tag::new("rust").unwrap());
+
+        let bookmark = Bookmark::new(
+            "https://www.rust-lang.org", // url = a link (should NOT be embedded)
+            "Rust Language",              // title
+            "A systems programming language", // description (should be embedded)
+            tags,
+        )
+        .unwrap();
+
+        let content = bookmark.get_content_for_embedding();
+        assert!(
+            content.contains("systems programming"),
+            "should embed description"
+        );
+        assert!(
+            !content.contains("rust-lang.org"),
+            "should NOT embed URL"
+        );
+    }
+
+    #[test]
+    fn given_memory_bookmark_when_get_embedding_content_then_uses_url_as_content() {
+        let _ = init_test_env();
+        let mut tags = HashSet::new();
+        tags.insert(Tag::new("project").unwrap());
+        tags.insert(Tag::new("_mem_").unwrap());
+
+        let bookmark = Bookmark::new(
+            "The auth service uses JWT tokens with 24h expiry", // url = memory content
+            "Auth Token Policy",                                 // title
+            "",                                                  // description empty
+            tags,
+        )
+        .unwrap();
+
+        assert!(bookmark.is_memory());
+        let content = bookmark.get_content_for_embedding();
+        assert!(
+            content.contains("JWT tokens"),
+            "should embed url (the memory content)"
+        );
+        assert!(
+            content.contains("Auth Token Policy"),
+            "should embed title"
+        );
+        assert!(content.contains("project"), "should embed visible tags");
+        assert!(!content.contains("_mem_"), "should NOT embed system tags");
     }
 
     #[test]
@@ -546,7 +683,6 @@ mod tests {
             "Example Site",
             "An example website",
             bookmark_tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -608,7 +744,6 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -640,7 +775,6 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -668,7 +802,6 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -692,20 +825,19 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
-        // Default should be false
-        assert!(!bookmark.embeddable);
-
-        // Set to true
-        bookmark.set_embeddable(true);
+        // Default should be true
         assert!(bookmark.embeddable);
 
-        // Set back to false
+        // Set to false
         bookmark.set_embeddable(false);
         assert!(!bookmark.embeddable);
+
+        // Set back to true
+        bookmark.set_embeddable(true);
+        assert!(bookmark.embeddable);
     }
     #[test]
     fn given_tag_when_check_system_then_validates_system_status() {
@@ -720,7 +852,6 @@ mod tests {
             "Example Site",
             "An example website",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -740,7 +871,6 @@ mod tests {
             "Example Site",
             "A website with no system tags",
             tags_uri,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -752,7 +882,6 @@ mod tests {
             "Python Snippet",
             "A Python code snippet",
             tags_snippet,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -772,7 +901,6 @@ mod tests {
             "Example Site",
             "A website",
             tags_uri,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -785,12 +913,93 @@ mod tests {
             "Python Snippet",
             "A Python code snippet",
             tags_snippet,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
         // Test get_action_content
         assert_eq!(bookmark_uri.get_action_content(), "https://example.com");
         assert_eq!(bookmark_snippet.get_action_content(), snippet_content);
+    }
+
+    #[test]
+    fn given_multiple_known_system_tags_when_new_then_returns_error() {
+        let _ = init_test_env();
+        let mut tags = HashSet::new();
+        tags.insert(Tag::new("_snip_").unwrap());
+        tags.insert(Tag::new("_shell_").unwrap());
+
+        let result = Bookmark::new("content", "title", "desc", tags);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("at most one system tag"), "got: {err}");
+    }
+
+    #[test]
+    fn given_bookmark_with_system_tag_when_add_second_system_tag_then_returns_error() {
+        let _ = init_test_env();
+        let mut tags = HashSet::new();
+        tags.insert(Tag::new("_snip_").unwrap());
+
+        let mut bookmark = Bookmark::new("content", "title", "desc", tags).unwrap();
+        let result = bookmark.add_system_tag(SystemTag::Shell);
+        assert!(result.is_err());
+        // Original tag should be preserved
+        assert!(bookmark.is_snippet());
+        assert!(!bookmark.is_shell());
+    }
+
+    #[test]
+    fn given_multiple_known_system_tags_when_set_tags_then_returns_error() {
+        let _ = init_test_env();
+        let mut bookmark = Bookmark::new("content", "title", "desc", HashSet::new()).unwrap();
+
+        let mut new_tags = HashSet::new();
+        new_tags.insert(Tag::new("_md_").unwrap());
+        new_tags.insert(Tag::new("_env_").unwrap());
+
+        let result = bookmark.set_tags(new_tags);
+        assert!(result.is_err());
+        // Original tags should be preserved
+        assert!(bookmark.tags.is_empty());
+    }
+
+    #[test]
+    fn given_bookmark_with_system_tag_when_add_same_tag_then_ok() {
+        let _ = init_test_env();
+        let mut tags = HashSet::new();
+        tags.insert(Tag::new("_snip_").unwrap());
+
+        let mut bookmark = Bookmark::new("content", "title", "desc", tags).unwrap();
+        // Adding the same system tag again is idempotent (HashSet)
+        let result = bookmark.add_tag(Tag::new("_snip_").unwrap());
+        assert!(result.is_ok());
+        assert!(bookmark.is_snippet());
+    }
+
+    #[test]
+    fn given_single_system_tag_when_set_tags_then_ok() {
+        let _ = init_test_env();
+        let mut bookmark = Bookmark::new("content", "title", "desc", HashSet::new()).unwrap();
+
+        let mut new_tags = HashSet::new();
+        new_tags.insert(Tag::new("_shell_").unwrap());
+        new_tags.insert(Tag::new("regular").unwrap());
+
+        let result = bookmark.set_tags(new_tags);
+        assert!(result.is_ok());
+        assert!(bookmark.is_shell());
+    }
+
+    #[test]
+    fn given_unknown_system_tags_when_new_then_allows_multiple() {
+        let _ = init_test_env();
+        // Unknown system tags (matching _xxx_ pattern but not in known list)
+        // should not trigger the validation
+        let mut tags = HashSet::new();
+        tags.insert(Tag::new("_custom1_").unwrap());
+        tags.insert(Tag::new("_custom2_").unwrap());
+
+        let result = Bookmark::new("content", "title", "desc", tags);
+        assert!(result.is_ok());
     }
 }

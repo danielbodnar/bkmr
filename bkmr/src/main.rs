@@ -4,14 +4,12 @@ use bkmr::cli::bookmark_commands::pre_fill_database;
 use bkmr::config::{load_settings, ConfigSource, Settings};
 use bkmr::exitcode;
 use bkmr::infrastructure::di::ServiceContainer;
-use bkmr::infrastructure::embeddings::DummyEmbedding;
 use bkmr::infrastructure::repositories::sqlite::{migration, repository::SqliteBookmarkRepository};
 use bkmr::util::helper::confirm;
 use clap::Parser;
 use crossterm::style::Stylize;
 use std::fs;
 use std::path::Path;
-use termcolor::{ColorChoice, StandardStream};
 use tracing::{debug, info, instrument};
 use tracing_subscriber::{
     filter::{filter_fn, LevelFilter},
@@ -21,8 +19,9 @@ use tracing_subscriber::{
 
 #[instrument]
 fn main() {
-    // use stderr as human output in order to make stdout output passable to downstream processes
-    let stderr = StandardStream::stderr(ColorChoice::Always);
+    // Register sqlite-vec before any database connections
+    bkmr::infrastructure::repositories::sqlite::register_sqlite_vec();
+
     let cli = Cli::parse();
 
     // Determine if colors should be disabled
@@ -33,16 +32,17 @@ fn main() {
 
     // Load configuration with CLI overrides
     let config_path_ref = cli.config.as_deref();
-    let settings = load_settings(config_path_ref).unwrap_or_else(|e| {
+    let mut settings = load_settings(config_path_ref).unwrap_or_else(|e| {
         debug!("Failed to load settings: {}. Using defaults.", e);
         Settings::default()
     });
 
-    // Note: OpenAI override from CLI flag will be handled in service container
-    // when the embedder selection is properly implemented
-    if cli.openai {
-        debug!("OpenAI embeddings requested via CLI flag");
+    // CLI --db flag takes highest priority
+    if let Some(ref db_path) = cli.db {
+        settings.db_url = db_path.to_string_lossy().to_string();
     }
+
+    info!(db_url = %settings.db_url, config_source = ?settings.config_source, "Configuration loaded");
 
     // Handle all database-independent operations first
     if let Some(result) = handle_database_independent_operations(cli.clone(), &settings) {
@@ -54,7 +54,7 @@ fn main() {
     }
 
     // Only create ServiceContainer for database-dependent operations
-    let service_container = match ServiceContainer::new(&settings, cli.openai) {
+    let service_container = match ServiceContainer::new(&settings) {
         Ok(container) => container,
         Err(e) => {
             eprintln!("{}: {}", "Failed to create service container".red(), e);
@@ -63,7 +63,7 @@ fn main() {
     };
 
     // Execute CLI command with services
-    if let Err(e) = execute_command_with_services(stderr, cli, service_container, settings) {
+    if let Err(e) = execute_command_with_services(cli, service_container, settings) {
         eprintln!("{}", format!("Error: {}", e).red());
         std::process::exit(exitcode::USAGE);
     }
@@ -145,8 +145,7 @@ fn handle_create_db_command(
         // Handle pre-fill if requested
         if pre_fill {
             eprintln!("Pre-filling database with demo entries...");
-            let embedder = DummyEmbedding;
-            pre_fill_database(&repository, &embedder)
+            pre_fill_database(&repository)
                 .map_err(|e| format!("Failed to pre-fill database: {}", e))?;
             eprintln!("Database pre-filled with demo entries.");
         }
@@ -219,12 +218,11 @@ fn handle_completion_command(shell: String) -> Result<(), Box<dyn std::error::Er
 }
 
 fn execute_command_with_services(
-    stderr: StandardStream,
     cli: Cli,
     services: ServiceContainer,
     settings: Settings,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    bkmr::cli::execute_command_with_services(stderr, cli, services, &settings)
+    bkmr::cli::execute_command_with_services(cli, services, &settings)
         .map_err(|e| format!("Command execution failed: {}", e).into())
 }
 
@@ -249,7 +247,6 @@ fn setup_logging(verbosity: u8, no_color: bool) {
         "reqwest",
         "mio",
         "want",
-        "tuikit",
         "hyper_util",
     ];
     let module_filter = filter_fn(move |metadata| {

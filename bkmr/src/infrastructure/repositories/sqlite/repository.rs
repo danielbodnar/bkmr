@@ -12,9 +12,11 @@ use super::error::{SqliteRepositoryError, SqliteResult};
 use crate::domain::bookmark::Bookmark;
 use crate::domain::error::{DomainError, RepositoryError};
 use crate::domain::repositories::query::{
-    AllTagsSpecification, AnyTagSpecification, BookmarkQuery, SortDirection,
+    AllTagsSpecification, AnyTagSpecification, BookmarkQuery, SortCriteria, SortDirection,
+    SortField,
 };
 use crate::domain::repositories::repository::BookmarkRepository;
+use crate::domain::search::RankedResult;
 use crate::domain::tag::Tag;
 use crate::infrastructure::repositories::sqlite::model::{
     DbBookmark, DbBookmarkChanges, IdResult, NewBookmark, TagsFrequency,
@@ -98,6 +100,10 @@ impl SqliteBookmarkRepository {
             .created_ts
             .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
 
+        let accessed_at = db_bookmark
+            .accessed_at
+            .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
+
         // Create bookmark from storage data
         Bookmark::from_storage(
             db_bookmark.id,
@@ -115,6 +121,7 @@ impl SqliteBookmarkRepository {
             db_bookmark.file_mtime,
             db_bookmark.file_hash,
             db_bookmark.opener,
+            accessed_at,
         )
         .map_err(|e| {
             SqliteRepositoryError::ConversionError(format!(
@@ -134,6 +141,7 @@ impl SqliteBookmarkRepository {
             tags: bookmark.formatted_tags(),
             desc: bookmark.description.to_string(),
             flags: bookmark.access_count,
+            last_update_ts: bookmark.updated_at.naive_utc(),
             embedding: bookmark.embedding.clone(),
             content_hash: bookmark.content_hash.clone(),
             created_ts: bookmark.created_at.map(|dt| dt.naive_utc()),
@@ -142,6 +150,7 @@ impl SqliteBookmarkRepository {
             file_mtime: bookmark.file_mtime,
             file_hash: bookmark.file_hash.clone(),
             opener: bookmark.opener.clone(),
+            accessed_at: bookmark.accessed_at.map(|dt| dt.naive_utc()),
         };
 
         debug!(
@@ -366,6 +375,7 @@ impl BookmarkRepository for SqliteBookmarkRepository {
                 file_mtime: bookmark.file_mtime,
                 file_hash: bookmark.file_hash.clone(),
                 opener: bookmark.opener.clone(),
+                accessed_at: bookmark.accessed_at.map(|dt| dt.naive_utc()),
             };
             debug!("Inserting bookmark: {}", db_bookmark);
 
@@ -400,12 +410,37 @@ impl BookmarkRepository for SqliteBookmarkRepository {
             SqliteRepositoryError::OperationFailed("Bookmark has no ID".to_string())
         })?;
 
-        let changes = self.to_db_model(bookmark);
-        // debug!("Updating bookmark with ID {}: {:?}", id, changes);  // logs entire embedding
+        let mut changes = self.to_db_model(bookmark);
+        // Auto-stamp updated_at (replaces the old UpdateLastTime trigger)
+        changes.last_update_ts = chrono::Utc::now().naive_utc();
 
         // Update the bookmark
         let result = diesel::update(dsl::bookmarks.filter(dsl::id.eq(id)))
             .set(&changes)
+            .execute(&mut conn)
+            .map_err(SqliteRepositoryError::DatabaseError)?;
+
+        if result == 0 {
+            return Err(SqliteRepositoryError::BookmarkNotFound(id).into());
+        }
+
+        debug!(bookmark_id = id, "Bookmark updated in database");
+        Ok(())
+    }
+
+    #[instrument(skip_all, level = "debug")]
+    fn update_access(&self, bookmark: &Bookmark) -> Result<(), DomainError> {
+        let mut conn = self.get_connection()?;
+
+        let id = bookmark.id.ok_or_else(|| {
+            SqliteRepositoryError::OperationFailed("Bookmark has no ID".to_string())
+        })?;
+
+        let result = diesel::update(dsl::bookmarks.filter(dsl::id.eq(id)))
+            .set((
+                dsl::flags.eq(bookmark.access_count),
+                dsl::accessed_at.eq(bookmark.accessed_at.map(|dt| dt.naive_utc())),
+            ))
             .execute(&mut conn)
             .map_err(SqliteRepositoryError::DatabaseError)?;
 
@@ -421,7 +456,7 @@ impl BookmarkRepository for SqliteBookmarkRepository {
         let mut conn = self.get_connection()?;
 
         // Begin transaction
-        conn.transaction::<bool, diesel::result::Error, _>(|conn| {
+        let deleted = conn.transaction::<bool, diesel::result::Error, _>(|conn| {
             let result = diesel::delete(dsl::bookmarks.filter(dsl::id.eq(id))).execute(conn)?;
             if result == 0 {
                 return Ok(false); // No bookmark was deleted
@@ -430,7 +465,10 @@ impl BookmarkRepository for SqliteBookmarkRepository {
         })
         .map_err(SqliteRepositoryError::DatabaseError)?;
 
-        Ok(true)
+        if deleted {
+            debug!(bookmark_id = id, "Bookmark deleted from database");
+        }
+        Ok(deleted)
     }
 
     #[instrument(skip_all, level = "trace")]
@@ -603,7 +641,8 @@ impl BookmarkRepository for SqliteBookmarkRepository {
         direction: SortDirection,
         limit: Option<usize>,
     ) -> Result<Vec<Bookmark>, DomainError> {
-        let mut query = BookmarkQuery::new().with_sort_by_date(direction);
+        let mut query =
+            BookmarkQuery::new().with_sort(SortCriteria::new(SortField::Modified, direction));
         if let Some(limit) = limit {
             query = query.with_limit(Option::from(limit));
         }
@@ -710,6 +749,46 @@ impl BookmarkRepository for SqliteBookmarkRepository {
         Ok(ids)
     }
 
+    fn get_bookmarks_fts_ranked(
+        &self,
+        fts_query: &str,
+        filter_ids: Option<&HashSet<i32>>,
+    ) -> Result<Vec<RankedResult>, DomainError> {
+        let mut conn = self.get_connection().map_err(|e| {
+            DomainError::RepositoryError(RepositoryError::Connection(e.to_string()))
+        })?;
+
+        let query = sql_query(
+            "SELECT id FROM bookmarks_fts \
+             WHERE bookmarks_fts MATCH ? \
+             ORDER BY rank",
+        )
+        .bind::<Text, _>(fts_query);
+
+        let ids: Vec<i32> = query
+            .load::<IdResult>(&mut conn)
+            .map_err(|e| DomainError::RepositoryError(RepositoryError::Query(e.to_string())))?
+            .into_iter()
+            .map(|record| record.id)
+            .collect();
+
+        // Enumerate to produce rank positions, optionally filtering by ID set
+        let ranked: Vec<RankedResult> = ids
+            .into_iter()
+            .enumerate()
+            .filter(|(_, id)| {
+                filter_ids.map_or(true, |ids| ids.contains(id))
+            })
+            .enumerate()
+            .map(|(filtered_rank, (_, id))| RankedResult {
+                bookmark_id: id,
+                rank: filtered_rank,
+            })
+            .collect();
+
+        Ok(ranked)
+    }
+
     #[instrument(skip(self))]
     fn exists_by_url(&self, url: &str) -> Result<i32, DomainError> {
         let bookmark = self.get_by_url(url)?;
@@ -729,12 +808,7 @@ impl BookmarkRepository for SqliteBookmarkRepository {
         // Query for bookmarks that are embeddable but don't have embeddings
         // Only check if embedding is NULL, ignore content_hash
         let db_bookmarks = dsl::bookmarks
-            .filter(
-                dsl::embeddable
-                    .eq(true)
-                    .and(dsl::embedding.is_null())
-                    .and(dsl::tags.not_like("%,_imported_,%")),
-            )
+            .filter(dsl::embeddable.eq(true).and(dsl::embedding.is_null()))
             .load::<DbBookmark>(&mut conn)
             .map_err(SqliteRepositoryError::DatabaseError)?;
 
@@ -747,6 +821,20 @@ impl BookmarkRepository for SqliteBookmarkRepository {
         }
 
         Ok(bookmarks)
+    }
+
+    fn clear_all_content_hashes(&self) -> Result<(), DomainError> {
+        let mut conn = self.get_connection()?;
+        sql_query("UPDATE bookmarks SET content_hash = NULL")
+            .execute(&mut conn)
+            .map_err(|e| {
+                DomainError::BookmarkOperationFailed(format!(
+                    "Failed to clear content hashes: {}",
+                    e
+                ))
+            })?;
+        debug!("Cleared all content hashes");
+        Ok(())
     }
 }
 
@@ -767,8 +855,7 @@ mod tests {
             .map(Tag::new)
             .collect::<Result<HashSet<_>, _>>()?;
 
-        let embedder = crate::infrastructure::embeddings::DummyEmbedding;
-        Bookmark::new(url, title, "Test description", tag_set, &embedder)
+        Bookmark::new(url, title, "Test description", tag_set)
     }
 
     #[test]
@@ -1568,7 +1655,7 @@ mod tests {
             .with_text_query(Some("TEST"))
             .with_tags_all(Some(&all_tags))
             .with_tags_any(Some(&any_tags))
-            .with_sort_by_date(SortDirection::Descending)
+            .with_sort(SortCriteria::new(SortField::Modified, SortDirection::Descending))
             .with_limit(Some(5));
 
         // Act
@@ -1606,6 +1693,38 @@ mod tests {
                 );
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn given_bookmark_with_content_hash_when_clear_all_hashes_then_all_null(
+    ) -> Result<(), DomainError> {
+        let repo = setup_test_db();
+        repo.empty_bookmark_table()?;
+
+        let mut bookmark =
+            create_test_bookmark("Hash Test", "https://hash-test.com", vec!["test"])?;
+        bookmark.content_hash = Some(vec![1, 2, 3, 4]);
+        repo.add(&mut bookmark)?;
+
+        let mut bookmark2 =
+            create_test_bookmark("Hash Test 2", "https://hash-test2.com", vec!["test"])?;
+        bookmark2.content_hash = Some(vec![5, 6, 7, 8]);
+        repo.add(&mut bookmark2)?;
+
+        // Verify hashes are set
+        let before = repo.get_by_id(bookmark.id.unwrap())?.unwrap();
+        assert!(before.content_hash.is_some());
+
+        // Clear all hashes
+        repo.clear_all_content_hashes()?;
+
+        // Verify all hashes are now NULL
+        let after1 = repo.get_by_id(bookmark.id.unwrap())?.unwrap();
+        let after2 = repo.get_by_id(bookmark2.id.unwrap())?.unwrap();
+        assert!(after1.content_hash.is_none());
+        assert!(after2.content_hash.is_none());
 
         Ok(())
     }

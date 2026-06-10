@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use bkmr::application::services::bookmark_service::BookmarkService;
 use bkmr::application::BookmarkServiceImpl;
-use bkmr::domain::repositories::query::{BookmarkQuery, SortDirection};
+use bkmr::domain::repositories::query::{BookmarkQuery, SortCriteria, SortDirection, SortField};
 use bkmr::domain::tag::Tag;
 use bkmr::infrastructure::embeddings::DummyEmbedding;
 use bkmr::infrastructure::repositories::json_import_repository::JsonImportRepository;
+use bkmr::infrastructure::repositories::null_vector_repository::NullVectorRepository;
 use bkmr::util::testing::{init_test_env, setup_test_db, EnvGuard};
 
 // Helper function to create a test service
@@ -15,9 +16,11 @@ fn create_test_service() -> impl BookmarkService {
     let repository = setup_test_db();
     let arc_repository = Arc::new(repository);
     let embedder = Arc::new(DummyEmbedding);
+    let vector_repository = Arc::new(NullVectorRepository);
     BookmarkServiceImpl::new(
         arc_repository,
         embedder,
+        vector_repository,
         Arc::new(JsonImportRepository::new()),
     )
 }
@@ -49,7 +52,7 @@ fn search_bookmarks(
         .with_tags_any(tags_any)
         .with_tags_any_not(tags_any_not)
         .with_tags_prefix(tags_prefix)
-        .with_sort_by_date(sort_direction);
+        .with_sort(SortCriteria::new(SortField::Modified, sort_direction));
 
     let query_with_limit = if let Some(lim) = limit {
         query.with_limit(Option::from(lim))

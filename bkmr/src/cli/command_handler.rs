@@ -4,7 +4,7 @@ use crate::cli::error::{CliError, CliResult};
 use crate::cli::fzf::fzf_process;
 use crate::cli::process::execute_bookmark_default_action;
 use crate::domain::bookmark::Bookmark;
-use crate::domain::repositories::query::{BookmarkQuery, SortDirection};
+use crate::domain::repositories::query::{BookmarkQuery, SortCriteria, SortDirection, SortField};
 use crate::domain::system_tag::SystemTag;
 use crate::infrastructure::di::ServiceContainer;
 use crate::infrastructure::json::{write_bookmarks_as_json, JsonBookmarkView};
@@ -12,17 +12,53 @@ use crate::util::argument_processor::ArgumentProcessor;
 use crate::util::helper::create_shell_function_name;
 use crossterm::style::Stylize;
 use itertools::Itertools;
-use std::io::Write;
-use termcolor::{Color, ColorSpec, StandardStream, WriteColor};
 use tracing::{instrument, warn};
 
-// Helper function to determine sort direction based on order flags
-fn determine_sort_direction(order_desc: bool, order_asc: bool) -> SortDirection {
-    match (order_desc, order_asc) {
-        (true, false) => SortDirection::Descending,
+/// Determine sort criteria from CLI flags.
+///
+/// Rules:
+/// - No flags: Id ascending (default)
+/// - `-o`/`-O` alone: imply Modified field (backward compat)
+/// - `--sort <field>` alone: field's natural default (id/title: Asc, modified: Desc)
+/// - `--sort <field>` + `-o`/`-O`: explicit combo
+fn determine_sort_criteria(
+    sort_field: Option<&str>,
+    order_desc: bool,
+    order_asc: bool,
+) -> CliResult<SortCriteria> {
+    let field = match sort_field {
+        Some(f) => match f {
+            "id" => SortField::Id,
+            "title" => SortField::Title,
+            "modified" => SortField::Modified,
+            _ => {
+                return Err(CliError::InvalidInput(format!(
+                    "Invalid sort field '{}'. Valid values: id, title, modified",
+                    f
+                )))
+            }
+        },
+        None => {
+            // No --sort: if -o/-O given, imply Modified (backward compat)
+            if order_desc || order_asc {
+                SortField::Modified
+            } else {
+                return Ok(SortCriteria::new(SortField::Id, SortDirection::Ascending));
+            }
+        }
+    };
+
+    let direction = match (order_desc, order_asc) {
+        (true, _) => SortDirection::Descending,
         (false, true) => SortDirection::Ascending,
-        _ => SortDirection::Descending, // Default to descending
-    }
+        _ => match field {
+            // Natural defaults: modified defaults to descending, others to ascending
+            SortField::Modified => SortDirection::Descending,
+            _ => SortDirection::Ascending,
+        },
+    };
+
+    Ok(SortCriteria::new(field, direction))
 }
 
 /// Handler for search command and its sub-operations
@@ -59,6 +95,7 @@ impl SearchCommandHandler {
         tags_any_not_prefix: Option<String>,
         order_desc: bool,
         order_asc: bool,
+        sort_field: Option<String>,
         limit: Option<i32>,
     ) -> CliResult<BookmarkQuery> {
         // Process all tag parameters using centralized logic
@@ -75,8 +112,9 @@ impl SearchCommandHandler {
             &tags_any_not_prefix,
         );
 
-        // Determine sort direction
-        let sort_direction = determine_sort_direction(order_desc, order_asc);
+        // Determine sort criteria
+        let sort_criteria =
+            determine_sort_criteria(sort_field.as_deref(), order_desc, order_asc)?;
 
         // Validate and convert limit
         let limit_usize = match limit {
@@ -90,15 +128,17 @@ impl SearchCommandHandler {
         };
 
         // Create query object
-        Ok(BookmarkQuery::new()
+        let query = BookmarkQuery::new()
             .with_text_query(fts_query.as_deref())
             .with_tags_exact(search_tags.exact_tags.as_ref())
             .with_tags_all(search_tags.all_tags.as_ref())
             .with_tags_all_not(search_tags.all_not_tags.as_ref())
             .with_tags_any(search_tags.any_tags.as_ref())
             .with_tags_any_not(search_tags.any_not_tags.as_ref())
-            .with_sort_by_date(sort_direction)
-            .with_limit(limit_usize))
+            .with_sort(sort_criteria)
+            .with_limit(limit_usize);
+
+        Ok(query)
     }
 
     /// Apply interpolation to bookmarks if requested
@@ -137,7 +177,6 @@ impl SearchCommandHandler {
         fields: &[DisplayField],
         non_interactive: bool,
         stdout: bool,
-        stderr: &mut StandardStream,
     ) -> CliResult<()> {
         match (is_fuzzy, is_json) {
             (true, _) => {
@@ -149,17 +188,16 @@ impl SearchCommandHandler {
                 write_bookmarks_as_json(&json_views)?;
             }
             _ => {
-                self.display_search_results(stderr, bookmarks, fields, non_interactive)?;
+                self.display_search_results(bookmarks, fields, non_interactive)?;
             }
         }
         Ok(())
     }
 
     /// Display search results in normal mode
-    #[instrument(skip(self, stderr, bookmarks, fields), level = "debug")]
+    #[instrument(skip(self, bookmarks, fields), level = "debug")]
     fn display_search_results(
         &self,
-        stderr: &mut StandardStream,
         bookmarks: &[Bookmark],
         fields: &[DisplayField],
         non_interactive: bool,
@@ -167,12 +205,11 @@ impl SearchCommandHandler {
         // If there's exactly one result and we're in interactive mode, execute the default action directly
         if bookmarks.len() == 1 && !non_interactive {
             let bookmark = &bookmarks[0];
-            writeln!(
-                stderr,
+            eprintln!(
                 "Found 1 bookmark: {} (ID: {}). Executing default action...",
                 bookmark.title.clone().green(),
                 bookmark.id.unwrap_or(0)
-            )?;
+            );
 
             return execute_bookmark_default_action(bookmark, self.services.action_service.clone());
         }
@@ -194,13 +231,8 @@ impl SearchCommandHandler {
             println!("{}", ids);
         } else {
             use crate::cli::process::process;
-            use crate::domain::error_context::CliErrorContext;
 
-            stderr
-                .set_color(ColorSpec::new().set_fg(Some(Color::Green)))
-                .cli_context("Failed to set color")?;
-            writeln!(stderr, "Selection: ").cli_context("Failed to write to stderr")?;
-            stderr.reset().cli_context("Failed to reset color")?;
+            eprintln!("{}", "Selection: ".green());
 
             process(bookmarks, &self.services, &self.settings)?;
         }
@@ -225,6 +257,7 @@ impl SearchCommandHandler {
             tags_any_not_prefix,
             order_desc,
             order_asc,
+            sort_field,
             non_interactive,
             is_fuzzy,
             fzf_style,
@@ -233,12 +266,15 @@ impl SearchCommandHandler {
             interpolate,
             shell_stubs,
             stdout,
+            embeddable,
         } = cli.command.unwrap()
         {
             let mut fields = crate::cli::display::DEFAULT_FIELDS.to_vec();
 
-            // Add timestamp field if ordering is requested
-            if order_desc || order_asc {
+            // Add timestamp field if sorting by modified date
+            let is_modified_sort = sort_field.as_deref() == Some("modified")
+                || (sort_field.is_none() && (order_desc || order_asc));
+            if is_modified_sort {
                 fields.push(DisplayField::LastUpdateTs);
             }
 
@@ -257,11 +293,17 @@ impl SearchCommandHandler {
                 tags_any_not_prefix,
                 order_desc,
                 order_asc,
+                sort_field,
                 limit,
             )?;
 
             // Execute search
             let mut bookmarks = self.services.bookmark_service.search_bookmarks(&query)?;
+
+            // Filter to embeddable only if requested
+            if embeddable {
+                bookmarks.retain(|b| b.embeddable);
+            }
 
             // Apply interpolation if requested
             if interpolate {
@@ -274,7 +316,6 @@ impl SearchCommandHandler {
             }
 
             // Handle output mode
-            let mut stderr = termcolor::StandardStream::stderr(termcolor::ColorChoice::Auto);
             self.handle_output_mode(
                 &bookmarks,
                 is_fuzzy,
@@ -283,7 +324,6 @@ impl SearchCommandHandler {
                 &fields,
                 non_interactive,
                 stdout,
-                &mut stderr,
             )?;
         }
         Ok(())
@@ -325,42 +365,64 @@ impl SearchCommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::repositories::query::SortDirection;
 
-    // Simple unit tests for sort direction logic - no database access needed
     #[test]
-    fn given_desc_flag_when_determine_sort_direction_then_returns_descending() {
-        // Act
-        let result = determine_sort_direction(true, false);
-
-        // Assert
-        assert_eq!(result, SortDirection::Descending);
+    fn given_no_flags_when_determine_sort_criteria_then_returns_id_ascending() {
+        let result = determine_sort_criteria(None, false, false).unwrap();
+        assert_eq!(result, SortCriteria::new(SortField::Id, SortDirection::Ascending));
     }
 
     #[test]
-    fn given_asc_flag_when_determine_sort_direction_then_returns_ascending() {
-        // Act
-        let result = determine_sort_direction(false, true);
-
-        // Assert
-        assert_eq!(result, SortDirection::Ascending);
+    fn given_desc_flag_only_when_determine_sort_criteria_then_returns_modified_descending() {
+        let result = determine_sort_criteria(None, true, false).unwrap();
+        assert_eq!(result, SortCriteria::new(SortField::Modified, SortDirection::Descending));
     }
 
     #[test]
-    fn given_both_flags_when_determine_sort_direction_then_returns_descending() {
-        // Act
-        let result = determine_sort_direction(true, true);
-
-        // Assert
-        assert_eq!(result, SortDirection::Descending);
+    fn given_asc_flag_only_when_determine_sort_criteria_then_returns_modified_ascending() {
+        let result = determine_sort_criteria(None, false, true).unwrap();
+        assert_eq!(result, SortCriteria::new(SortField::Modified, SortDirection::Ascending));
     }
 
     #[test]
-    fn given_no_flags_when_determine_sort_direction_then_returns_descending() {
-        // Act
-        let result = determine_sort_direction(false, false);
+    fn given_both_direction_flags_when_determine_sort_criteria_then_desc_wins() {
+        let result = determine_sort_criteria(None, true, true).unwrap();
+        assert_eq!(result, SortCriteria::new(SortField::Modified, SortDirection::Descending));
+    }
 
-        // Assert
-        assert_eq!(result, SortDirection::Descending);
+    #[test]
+    fn given_sort_title_when_determine_sort_criteria_then_returns_title_ascending() {
+        let result = determine_sort_criteria(Some("title"), false, false).unwrap();
+        assert_eq!(result, SortCriteria::new(SortField::Title, SortDirection::Ascending));
+    }
+
+    #[test]
+    fn given_sort_title_desc_when_determine_sort_criteria_then_returns_title_descending() {
+        let result = determine_sort_criteria(Some("title"), true, false).unwrap();
+        assert_eq!(result, SortCriteria::new(SortField::Title, SortDirection::Descending));
+    }
+
+    #[test]
+    fn given_sort_modified_when_determine_sort_criteria_then_returns_modified_descending() {
+        let result = determine_sort_criteria(Some("modified"), false, false).unwrap();
+        assert_eq!(result, SortCriteria::new(SortField::Modified, SortDirection::Descending));
+    }
+
+    #[test]
+    fn given_sort_modified_asc_when_determine_sort_criteria_then_returns_modified_ascending() {
+        let result = determine_sort_criteria(Some("modified"), false, true).unwrap();
+        assert_eq!(result, SortCriteria::new(SortField::Modified, SortDirection::Ascending));
+    }
+
+    #[test]
+    fn given_sort_id_desc_when_determine_sort_criteria_then_returns_id_descending() {
+        let result = determine_sort_criteria(Some("id"), true, false).unwrap();
+        assert_eq!(result, SortCriteria::new(SortField::Id, SortDirection::Descending));
+    }
+
+    #[test]
+    fn given_invalid_sort_field_when_determine_sort_criteria_then_returns_error() {
+        let result = determine_sort_criteria(Some("invalid"), false, false);
+        assert!(result.is_err());
     }
 }

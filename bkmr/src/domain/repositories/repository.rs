@@ -3,6 +3,7 @@
 use crate::domain::bookmark::Bookmark;
 use crate::domain::error::DomainError;
 use crate::domain::repositories::query::{BookmarkQuery, SortDirection};
+use crate::domain::search::RankedResult;
 use crate::domain::tag::Tag;
 use crate::infrastructure::repositories::sqlite::connection::PooledConnection;
 use crate::infrastructure::repositories::sqlite::error::{SqliteRepositoryError, SqliteResult};
@@ -33,8 +34,11 @@ pub trait BookmarkRepository: std::fmt::Debug + Send + Sync {
     /// Add a new bookmark
     fn add(&self, bookmark: &mut Bookmark) -> Result<(), DomainError>;
 
-    /// Update an existing bookmark
+    /// Update an existing bookmark (stamps updated_at automatically)
     fn update(&self, bookmark: &Bookmark) -> Result<(), DomainError>;
+
+    /// Update access metadata only (does NOT change updated_at)
+    fn update_access(&self, bookmark: &Bookmark) -> Result<(), DomainError>;
 
     /// Delete a bookmark by ID
     fn delete(&self, id: i32) -> Result<bool, DomainError>;
@@ -81,4 +85,15 @@ pub trait BookmarkRepository: std::fmt::Debug + Send + Sync {
         &self,
         conn: &mut PooledConnection,
     ) -> Result<Vec<i32>, SqliteRepositoryError>;
+
+    /// FTS search returning results with rank positions preserved for RRF fusion.
+    /// If `filter_ids` is Some, only returns results whose IDs are in the set.
+    fn get_bookmarks_fts_ranked(
+        &self,
+        fts_query: &str,
+        filter_ids: Option<&HashSet<i32>>,
+    ) -> Result<Vec<RankedResult>, DomainError>;
+
+    /// Reset all content hashes to NULL (clean slate for re-embedding)
+    fn clear_all_content_hashes(&self) -> Result<(), DomainError>;
 }

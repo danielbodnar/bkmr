@@ -5,7 +5,7 @@
 use crate::application::services::BookmarkService;
 use crate::domain::bookmark::Bookmark;
 use crate::domain::error::{DomainError, DomainResult};
-use crate::domain::repositories::query::{BookmarkQuery, SortDirection};
+use crate::domain::repositories::query::{BookmarkQuery, SortCriteria, SortDirection, SortField};
 use crate::domain::tag::Tag;
 use crate::lsp::domain::LanguageRegistry;
 use crate::lsp::error::{LspError, LspResult};
@@ -62,6 +62,8 @@ impl CommandService {
                 description,
                 Some(&tag_set),
                 false, // Don't fetch metadata for snippets
+                true,  // embeddable by default
+                None,  // snippets don't use a custom opener
             )
             .map_err(LspError::from)
             .map_err(|e| e.context("adding snippet bookmark via service"))?;
@@ -93,7 +95,7 @@ impl CommandService {
         }
 
         query.tags_all = Some(tags_all);
-        query.sort_by_date = Some(SortDirection::Descending);
+        query.sort = Some(SortCriteria::new(SortField::Modified, SortDirection::Descending));
 
         let bookmarks = self
             .bookmark_service
@@ -346,6 +348,7 @@ mod tests {
     use super::*;
     use crate::application::services::bookmark_service_impl::BookmarkServiceImpl;
     use crate::infrastructure::repositories::json_import_repository::JsonImportRepository;
+    use crate::infrastructure::repositories::null_vector_repository::NullVectorRepository;
     use crate::util::testing::{init_test_env, setup_test_db, EnvGuard};
     use std::sync::Arc;
 
@@ -360,6 +363,7 @@ mod tests {
         let bookmark_service = Arc::new(BookmarkServiceImpl::new(
             repository_arc,
             embedder,
+            Arc::new(NullVectorRepository),
             Arc::new(JsonImportRepository::new()),
         ));
         let service = CommandService::with_service(bookmark_service);
@@ -401,6 +405,7 @@ mod tests {
         let bookmark_service = Arc::new(BookmarkServiceImpl::new(
             repository_arc,
             embedder,
+            Arc::new(NullVectorRepository),
             Arc::new(JsonImportRepository::new()),
         ));
         let service = CommandService::with_service(bookmark_service);
@@ -449,6 +454,7 @@ mod tests {
         let bookmark_service = Arc::new(BookmarkServiceImpl::new(
             repository_arc,
             embedder,
+            Arc::new(NullVectorRepository),
             Arc::new(JsonImportRepository::new()),
         ));
         let service = CommandService::with_service(bookmark_service);
@@ -504,6 +510,7 @@ mod tests {
         let bookmark_service = Arc::new(BookmarkServiceImpl::new(
             repository_arc,
             embedder,
+            Arc::new(NullVectorRepository),
             Arc::new(JsonImportRepository::new()),
         ));
         let service = CommandService::with_service(bookmark_service.clone());
@@ -519,6 +526,8 @@ mod tests {
                 None,
                 Some(&tags),
                 false,
+                true,
+                None,
             )
             .unwrap();
         let id = bookmark.id.unwrap();
@@ -545,6 +554,7 @@ mod tests {
         let bookmark_service = Arc::new(BookmarkServiceImpl::new(
             repository_arc,
             embedder,
+            Arc::new(NullVectorRepository),
             Arc::new(JsonImportRepository::new()),
         ));
         let service = CommandService::with_service(bookmark_service);

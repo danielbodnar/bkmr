@@ -4,7 +4,7 @@ use crate::domain::bookmark::Bookmark;
 use crate::domain::embedding::Embedder;
 use crate::domain::error::{DomainError, DomainResult};
 use crate::domain::repositories::repository::BookmarkRepository;
-use crate::infrastructure::embeddings::DummyEmbedding;
+use crate::domain::repositories::vector_repository::VectorRepository;
 use crate::util::helper::calc_content_hash;
 use crate::util::path::{abspath, is_file_path};
 use markdown::{to_html_with_options, Options};
@@ -26,6 +26,7 @@ struct TocEntry {
 #[derive(Debug)]
 pub struct MarkdownAction {
     repository: Option<Arc<dyn BookmarkRepository>>,
+    vector_repository: Option<Arc<dyn VectorRepository>>,
     embedder: Arc<dyn Embedder>,
 }
 
@@ -34,6 +35,7 @@ impl MarkdownAction {
     pub fn new(embedder: Arc<dyn Embedder>) -> Self {
         Self {
             repository: None,
+            vector_repository: None,
             embedder,
         }
     }
@@ -41,10 +43,12 @@ impl MarkdownAction {
     // Constructor with repository for embedding support
     pub fn new_with_repository(
         repository: Arc<dyn BookmarkRepository>,
+        vector_repository: Arc<dyn VectorRepository>,
         embedder: Arc<dyn Embedder>,
     ) -> Self {
         Self {
             repository: Some(repository),
+            vector_repository: Some(vector_repository),
             embedder,
         }
     }
@@ -85,7 +89,6 @@ impl MarkdownAction {
         })
     }
 
-    // TODO: why do we need embeddings here (SRP violation?)
     /// Check if embedding is allowed and possible
     fn can_update_embedding(&self, bookmark: &Bookmark) -> bool {
         // Check if we have a repository
@@ -98,12 +101,13 @@ impl MarkdownAction {
             return false;
         }
 
-        // Check if OpenAI embeddings are enabled (not using DummyEmbedding)
-        self.embedder.as_any().type_id() != std::any::TypeId::of::<DummyEmbedding>()
+        // Check if real embeddings are enabled (DummyEmbedding has dimensions == 0)
+        self.embedder.dimensions() > 0
     }
 
-    /// Update bookmark with embedding if repository is available and conditions are met
-    fn update_embedding(&self, bookmark: &Bookmark, content: &str) -> DomainResult<()> {
+    /// Update bookmark with embedding if repository is available and conditions are met.
+    /// Uses bookmark.get_content_for_embedding() for consistent type-aware content.
+    fn update_embedding(&self, bookmark: &Bookmark) -> DomainResult<()> {
         // Check if embedding is allowed
         if !self.can_update_embedding(bookmark) {
             debug!("Embedding update skipped: not allowed or not possible");
@@ -118,29 +122,27 @@ impl MarkdownAction {
                 .get_by_id(id)?
                 .ok_or_else(|| DomainError::BookmarkNotFound(id.to_string()))?;
 
-            // Calculate content hash for the current content
-            let content_hash = calc_content_hash(content);
+            // Use type-aware content for embedding (consistent with backfill)
+            let content = updated_bookmark.get_content_for_embedding();
+            let content_hash = calc_content_hash(&content);
 
             // Only update if content has changed
             if updated_bookmark.content_hash.as_ref() != Some(&content_hash) {
                 debug!("Content changed, updating embedding for bookmark ID {}", id);
 
-                // Use the instance embedder instead of global state
-                let embedder = &*self.embedder;
-
-                // Generate embedding
-                if let Some(embedding) = embedder.embed(content)? {
-                    // Serialize the embedding
-                    let serialized = crate::domain::embedding::serialize_embedding(embedding)?;
-
-                    // Update the bookmark
-                    updated_bookmark.embedding = Some(serialized);
-                    updated_bookmark.content_hash = Some(content_hash);
-
-                    // Save to repository
-                    repository.update(&updated_bookmark)?;
-                    info!("Successfully updated embedding for bookmark ID {}", id);
+                // Generate embedding and store in VectorRepository
+                if let Some(embedding) = self.embedder.embed_document(&content)? {
+                    if let Some(vec_repo) = &self.vector_repository {
+                        vec_repo.upsert_embedding(id, &embedding)?;
+                    }
                 }
+
+                updated_bookmark.embedding = None;
+                updated_bookmark.content_hash = Some(content_hash);
+
+                // Save to repository
+                repository.update(&updated_bookmark)?;
+                info!("Successfully updated content hash for bookmark ID {}", id);
             } else {
                 debug!(
                     "Content unchanged, not updating embedding for bookmark ID {}",
@@ -498,7 +500,7 @@ impl BookmarkAction for MarkdownAction {
         let rendered_markdown = markdown_content.clone();
 
         // Update embedding if possible
-        if let Err(e) = self.update_embedding(bookmark, &markdown_content) {
+        if let Err(e) = self.update_embedding(bookmark) {
             error!("Failed to update embedding: {}", e);
             // Continue with rendering - don't fail the whole operation if embedding fails
         }
@@ -1123,7 +1125,8 @@ mod tests {
         // Action with repository
         let repository = Arc::new(crate::util::testing::setup_test_db());
         let embedder = Arc::new(crate::infrastructure::embeddings::DummyEmbedding);
-        let action_with_repo = MarkdownAction::new_with_repository(repository, embedder);
+        let vector_repository = Arc::new(crate::infrastructure::repositories::null_vector_repository::NullVectorRepository);
+        let action_with_repo = MarkdownAction::new_with_repository(repository, vector_repository, embedder);
 
         // Create test bookmarks
         let mut tags = HashSet::new();
@@ -1146,6 +1149,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         // Bookmark with embeddable=false
@@ -1165,6 +1169,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         // Test cases
@@ -1214,6 +1219,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         // Execute the action
@@ -1262,6 +1268,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         // Execute the action
@@ -1310,6 +1317,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         // Execute the action
@@ -1663,6 +1671,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         let result = action.get_source_file_path(&bookmark);
@@ -1697,6 +1706,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         let result = action.get_source_file_path(&bookmark);
@@ -1730,6 +1740,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         let result = action.get_source_file_path(&bookmark);

@@ -8,7 +8,7 @@ use rustyline::{config::Configurer, error::ReadlineError, history::FileHistory, 
 use std::io::Write;
 use std::process::Command;
 use std::sync::Arc;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 #[derive(Debug)]
 pub struct ShellAction {
@@ -196,6 +196,7 @@ impl ShellAction {
         if status.success() {
             Ok(())
         } else {
+            warn!(exit_code = ?status.code(), "Shell script failed");
             Err(DomainError::Other(format!(
                 "Shell script exited with non-zero status: {:?}",
                 status.code()
@@ -283,6 +284,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         // Act
@@ -322,6 +324,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         // Act
@@ -360,6 +363,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         // Act
@@ -540,6 +544,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         // Act

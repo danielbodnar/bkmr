@@ -1,5 +1,6 @@
 use crate::application::actions::{
-    DefaultAction, EnvAction, MarkdownAction, ShellAction, SnippetAction, TextAction, UriAction,
+    DefaultAction, EnvAction, MarkdownAction, MemoryAction, ShellAction, SnippetAction, TextAction,
+    UriAction,
 };
 use crate::application::services::action_service::{ActionService, ActionServiceImpl};
 use crate::application::services::bookmark_service::BookmarkService;
@@ -17,6 +18,7 @@ use crate::infrastructure::clipboard::ClipboardServiceImpl;
 use crate::infrastructure::embeddings::DummyEmbedding;
 use crate::infrastructure::interpolation::minijinja_engine::{MiniJinjaEngine, SafeShellExecutor};
 use crate::infrastructure::repositories::file_import_repository::FileImportRepository;
+use crate::infrastructure::repositories::null_vector_repository::NullVectorRepository;
 use crate::infrastructure::repositories::sqlite::repository::SqliteBookmarkRepository;
 use crate::lsp::services::{CommandService, CompletionService, DocumentService, LspSnippetService};
 use crate::util::testing::{init_test_env, setup_test_db};
@@ -50,6 +52,7 @@ impl TestServiceContainer {
         let bookmark_service = Arc::new(BookmarkServiceImpl::new(
             repository.clone(),
             embedder.clone(),
+            Arc::new(NullVectorRepository),
             Arc::new(FileImportRepository::new()),
         ));
 
@@ -124,11 +127,13 @@ impl TestServiceContainer {
         ));
 
         let markdown_action: Box<dyn BookmarkAction> = Box::new(
-            MarkdownAction::new_with_repository(repository.clone(), embedder.clone()),
+            MarkdownAction::new_with_repository(repository.clone(), Arc::new(NullVectorRepository), embedder.clone()),
         );
 
         let env_action: Box<dyn BookmarkAction> =
             Box::new(EnvAction::new(interpolation_service.clone()));
+
+        let memory_action: Box<dyn BookmarkAction> = Box::new(MemoryAction::new());
 
         let default_action: Box<dyn BookmarkAction> =
             Box::new(DefaultAction::new(interpolation_service.clone()));
@@ -140,6 +145,7 @@ impl TestServiceContainer {
             shell_action,
             markdown_action,
             env_action,
+            memory_action,
             default_action,
         ))
     }

@@ -5,15 +5,13 @@
 [![Docs.rs](https://docs.rs/bkmr/badge.svg)](https://docs.rs/bkmr)
 [![Build Status][build-image]][build-url]
 
-> Combine any snippet (code, urls, markdown, text) with powerful search, interpolation and execution.
+> Store anything, find it by meaning, act on it instantly.
 
-# Beyond Bookmarks and Snippets: A CLI Knowledge Management System
+# Beyond Bookmarks and Snippets: Knowledge Management for Humans and Agents
 
-[bkmr reborn](https://sysid.github.io/bkmr-reborn/)
+`bkmr` - [crate of the week 482](https://this-week-in-rust.org/blog/2023/02/15/this-week-in-rust-482/) - memories, bookmarks, snippets, text - search it, invoke it!
 
-`bkmr` - selected [crate of the week 482](https://this-week-in-rust.org/blog/2023/02/15/this-week-in-rust-482/) - is a fast, feature-rich command-line tool that extends bookmark management, snippet handling, markdown rendering, script execution and more.
-
-**Organize**, **find**, and **apply** your various content types:
+**Organize**, **find**, and **apply** various content types:
 
 - Web URLs with automatic metadata extraction
 - Code snippets for quick access and reuse
@@ -21,32 +19,36 @@
 - Markdown documents with live rendering, incl. TOC
 - Plain text with Jinja template interpolation
 - Local files and directories integration
-- Semantic embeddings for AI-powered search
-
-**Centralize** your data in bkmr's database (`add`) or **keep it in your filesystem**
-(`import-files`) ([see](https://github.com/sysid/bkmr/wiki/File-Import-and-Editing)).
-
-Example:
-- bookmarks, links short snippets go into the database
-- large markdown documents or scripts stay where they are and only references go into DB
-
-**Both options provide the full benefits of `bkmr`.**
 
 ## Why bkmr?
 
-- **Developer-focused**: Integrates seamlessly with your workflow and toolchain
+- **Developer- and agent-focused**: Integrates seamlessly with workflow and toolchain
+- **Agent-friendly**: JSON output, non-interactive mode, and `_mem_` system tag for AI agent memory
 - **Multifunctional**: Handles many content types with context-aware actions
 - **Intelligent**: Full-text and semantic search capabilities
-- **Privacy-focused**: Local database, no cloud dependencies unless enabled
+- **Privacy-focused**: Fully local — database, embeddings, and search all run offline
 - **Fast**: 20x faster than similar Python tools
+- **Automation-ready**: Programmatic CLI with `--json`, `--np`, `--stdout` for pipelines and integrations
+- **[Editor Integration](https://github.com/sysid/bkmr/wiki/Editor-Integration)**: Built-in LSP server
 
-### NEW: Editor Integrations!
+## Agent Memory and Skill
 
-- **Built-in LSP server**: Use `bkmr lsp` for VS Code, Vim, Emacs - automatic snippet completion with language-aware filtering
-- **[Neovim Plugin](https://github.com/sysid/bkmr-nvim)**: Visual interface with Telescope integration and zero configuration
-- **[IntelliJ Plugin](https://github.com/sysid/bkmr-intellij-plugin)**: JetBrains Marketplace plugin for all IDEs
+Persistent long-term memory for AI agents. The `_mem_` system tag and `hsearch` (hybrid FTS + semantic search) create a complete read/write memory interface:
 
-See **[Editor Integration](https://github.com/sysid/bkmr/wiki/Editor-Integration)** for complete documentation.
+```bash
+# Agent stores memory:
+bkmr add "Prod DB is PostgreSQL 15 on port 5433" fact,database \
+  --title "Production database config" -t mem --no-web
+
+# Agent queries memories with natural language (hybrid search)
+bkmr hsearch "database configuration" -t _mem_ --json --np
+
+# All output is structured JSON — designed for programmatic consumption
+```
+
+Use [`skill/bkmr-memory`](skill/bkmr-memory/SKILL.md). It defines a comprehensive memory protocol with taxonomy, deduplication, and session workflows.
+
+See **[Agent Integration](https://github.com/sysid/bkmr/wiki/Agent-Integration)**.
 
 ## Quick Examples
 
@@ -69,21 +71,29 @@ bkmr add "# Notes\n## Section 1" docs,_md_ --title "Project Notes"
 # Import files with frontmatter
 bkmr import-files ~/scripts/ --base-path SCRIPTS_HOME
 
-# AI-powered semantic search
-bkmr --openai sem-search "containerized application security"
+# Local semantic search (no API keys needed)
+bkmr sem-search "containerized application security"
+
+# Agent memory: store and retrieve knowledge
+bkmr add "Prod DB on port 5433" fact,database --title "Prod DB config" -t mem --no-web
+bkmr hsearch "database config" -t _mem_ --json --np
 ```
 
 ### Screenshots
 
-**Bookmarks:**
-<img src="./docs/bkmr4-bookmarks.png" alt="bookmarks" width="800"/>
+**General Usage:**
 
-**Snippets:**
-<img src="./docs/bkmr4-fzf-snippets.png" alt="fzf-snippets" width="800"/>
+![bkmr demo](docs/demo.gif)
 
-**Demos:**
-- <a href="https://asciinema.org/a/q4Okf4j2ja757Nav5wf0tNz8k?autoplay=1" alt="Never Context-Switch Again"><img src="https://asciinema.org/a/q4Okf4j2ja757Nav5wf0tNz8k.svg" /></a>
-- [Overview](https://asciinema.org/a/VTsHuw1Ugsbo10EP0tZ3PdpoG?autoplay=1&speed=2&t=3) | [Getting Started](https://asciinema.org/a/wpnsTw3Cl7DK2R7jK7WVpp9OR?autoplay=1&speed=2&t=3) | [Search and Filter](https://asciinema.org/a/M97UJMKxw1nxnzO4SaowGZAmb?autoplay=1&speed=2&t=3) | [Edit and Update](https://asciinema.org/a/uCuNPSlqRemlcXiVQ3CIqq8uV?autoplay=1&speed=2&t=3) | [Tag Management](https://asciinema.org/a/jNOLfhc6aFV3wPGTgOzgrM7Kc?autoplay=1&speed=2&t=3)
+**Fuzzy Search with FZF:**
+
+![fzf demo](docs/fzf-demo.gif)
+
+**Agent Memory:**
+
+![agent demo](docs/agent-demo.gif)
+
+> Detailed walkthroughs: [Overview](https://asciinema.org/a/VTsHuw1Ugsbo10EP0tZ3PdpoG?autoplay=1&speed=2&t=3) | [Getting Started](https://asciinema.org/a/wpnsTw3Cl7DK2R7jK7WVpp9OR?autoplay=1&speed=2&t=3) | [Search and Filter](https://asciinema.org/a/M97UJMKxw1nxnzO4SaowGZAmb?autoplay=1&speed=2&t=3) | [Edit and Update](https://asciinema.org/a/uCuNPSlqRemlcXiVQ3CIqq8uV?autoplay=1&speed=2&t=3) | [Tag Management](https://asciinema.org/a/jNOLfhc6aFV3wPGTgOzgrM7Kc?autoplay=1&speed=2&t=3)
 
 ## Getting Started
 
@@ -98,6 +108,7 @@ pip install bkmr
 
 # Via brew
 brew install bkmr
+export ORT_DYLIB_PATH=/opt/homebrew/lib/libonnxruntime.dylib
 ```
 
 See **[Installation Guide](https://github.com/sysid/bkmr/wiki/Installation)** for detailed instructions and troubleshooting.
@@ -134,14 +145,23 @@ bkmr search --fzf
 
 | Command | Description |
 |---------|-------------|
-| `search` | Search across all content with full-text and tag filtering |
-| `sem-search` | AI-powered semantic search using OpenAI embeddings |
-| `add` | Add new content (URLs, snippets, files, shell commands, etc.) |
-| `open` | Launch or interact with stored items (supports script arguments) |
-| `edit` | Smart editing: auto-detects file-imported bookmarks |
+| `search` | Full-text search with tag filtering, FZF, JSON output |
+| `hsearch` | Hybrid search: FTS + semantic with RRF fusion |
+| `sem-search` | Semantic search using local embeddings (offline, no API keys) |
+| `add` | Add bookmarks (URLs, snippets, scripts, markdown, env vars) |
+| `open` | Smart action dispatch based on content type |
+| `edit` | Edit bookmarks (smart: opens source file for imports) |
+| `update` | Modify tags and custom openers |
+| `delete` | Delete bookmarks by ID |
+| `show` | Display bookmark details |
 | `import-files` | Import files/directories with frontmatter parsing |
-| `tags` | View and manage your tag taxonomy |
-| `set-embeddable` | Configure items for semantic search |
+| `tags` | View tag taxonomy with usage counts |
+| `info` | Show configuration, database path, embedding status |
+| `backfill` | Generate missing embeddings |
+| `clear-embeddings` | Clear all embeddings and content hashes |
+| `lsp` | Start LSP server for editor snippet completion |
+| `completion` | Generate shell completions (bash, zsh, fish) |
+| `surprise` | Open random URL bookmarks |
 
 **Complete command documentation**: See **[Basic Usage](https://github.com/sysid/bkmr/wiki/Basic-Usage)** for detailed examples.
 
@@ -149,15 +169,17 @@ bkmr search --fzf
 
 bkmr intelligently handles different content types with appropriate actions:
 
-| Content Type          | Default Action                        | System Tag   |
-|-----------------------|---------------------------------------|--------------|
-| URLs                  | Open in browser                       | (none)       |
-| Snippets              | Copy to clipboard                     | `_snip_`     |
-| Shell Scripts         | Interactive edit then execute         | `_shell_`    |
-| Environment Variables | Print for sourcing in shell           | `_env_`      |
-| Markdown              | Render in browser with TOC            | `_md_`       |
-| Text Documents        | Copy to clipboard                     | `_imported_` |
-| Local Files           | Open with default application         | (none)       |
+| Content Type          | Default Action                | System Tag   |
+|-----------------------|-------------------------------|--------------|
+| URLs                  | Open in browser               | (none)       |
+| Snippets              | Copy to clipboard             | `_snip_`     |
+| Shell Scripts         | Interactive edit + execute    | `_shell_`    |
+| Markdown              | Render in browser with TOC    | `_md_`       |
+| Environment Variables | Print for `eval`/`source`     | `_env_`      |
+| Text Documents        | Copy to clipboard             | `_imported_` |
+| Agent Memory          | Display to stdout             | `_mem_`      |
+
+> **Rule:** A bookmark can have at most **one** system tag. Local files without a system tag open with the default application.
 
 Learn more: **[Content Types](https://github.com/sysid/bkmr/wiki/Content-Types)** | **[Core Concepts](https://github.com/sysid/bkmr/wiki/Core-Concepts)**
 
@@ -180,8 +202,9 @@ Comprehensive documentation is available in the **[bkmr Wiki](https://github.com
 ### Advanced Topics
 - **[Configuration](https://github.com/sysid/bkmr/wiki/Configuration)** - Complete configuration reference
 - **[Template Interpolation](https://github.com/sysid/bkmr/wiki/Template-Interpolation)** - Jinja2 dynamic content
+- **[Agent Integration](https://github.com/sysid/bkmr/wiki/Agent-Integration)** - AI agent memory, JSON API, bulk import
 - **[File Import and Editing](https://github.com/sysid/bkmr/wiki/File-Import-and-Editing)** - Frontmatter, base paths, smart editing
-- **[Semantic Search](https://github.com/sysid/bkmr/wiki/Semantic-Search)** - OpenAI-powered AI search
+- **[Semantic Search](https://github.com/sysid/bkmr/wiki/Semantic-Search)** - Local offline semantic search with fastembed
 - **[Editor Integration](https://github.com/sysid/bkmr/wiki/Editor-Integration)** - LSP server and editor plugins
 - **[Advanced Workflows](https://github.com/sysid/bkmr/wiki/Advanced-Workflows)** - Power user techniques
 
@@ -260,7 +283,7 @@ cargo test -- --test-threads=1
 make test
 ```
 
-**Why single-threaded?** Tests share SQLite database and environment variables. Parallel execution causes race conditions.
+**Why single-threaded?** Tests share a SQLite database and environment variables. Parallel execution causes race conditions.
 
 See **[Development](https://github.com/sysid/bkmr/wiki/Development)** for complete contributor guide.
 
@@ -273,8 +296,6 @@ We welcome contributions! Please check our [Contributing Guidelines](./CONTRIBUT
 - Issues: https://github.com/sysid/bkmr/issues
 - Wiki: https://github.com/sysid/bkmr/wiki
 - Discussions: https://github.com/sysid/bkmr/discussions
-
-**For developers**: Remember to always run tests with `--test-threads=1` to avoid database conflicts.
 
 <!-- Badges -->
 [build-image]: https://github.com/sysid/bkmr/actions/workflows/release_wheels.yml/badge.svg

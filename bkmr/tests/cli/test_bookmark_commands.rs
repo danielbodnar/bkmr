@@ -2,7 +2,6 @@ use bkmr::cli::args::{Cli, Commands};
 use bkmr::domain::tag::Tag;
 use bkmr::util::argument_processor::ArgumentProcessor;
 use bkmr::util::testing::{init_test_env, EnvGuard};
-use termcolor::{ColorChoice, StandardStream};
 
 // fn create_mock_service() -> impl BookmarkService {
 //     // Create a real repository but in a test environment
@@ -26,8 +25,9 @@ fn given_tag_prefix_options_when_search_then_combines_tag_sets() {
     let _ = Cli {
         name: None,
         config: None,
+        db: None,
         debug: 0,
-        openai: false,
+
         no_color: false,
         generate_config: false,
         command: Some(Commands::Search {
@@ -44,6 +44,7 @@ fn given_tag_prefix_options_when_search_then_combines_tag_sets() {
             tags_any_not_prefix: Some("prefix5".to_string()),
             order_desc: false,
             order_asc: false,
+            sort_field: None,
             non_interactive: true,
             is_fuzzy: false,
             fzf_style: None,
@@ -52,11 +53,11 @@ fn given_tag_prefix_options_when_search_then_combines_tag_sets() {
             interpolate: false,
             shell_stubs: false,
             stdout: false,
+            embeddable: false,
         }),
     };
 
     // Use a null output stream for testing
-    let _ = StandardStream::stderr(ColorChoice::Never);
 
     // We'll mock the service function calls by patching it with a function that records calls
     // For simplicity in this example, we'll just verify the core functions work as expected
@@ -92,8 +93,9 @@ fn given_search_command_with_prefixes_when_executed_then_performs_search() {
     let _ = Cli {
         name: None,
         config: None,
+        db: None,
         debug: 0,
-        openai: false,
+
         no_color: false,
         generate_config: false,
         command: Some(Commands::Search {
@@ -110,6 +112,7 @@ fn given_search_command_with_prefixes_when_executed_then_performs_search() {
             tags_any_not_prefix: None,
             order_desc: false,
             order_asc: false,
+            sort_field: None,
             non_interactive: true,
             is_fuzzy: false,
             fzf_style: None,
@@ -118,11 +121,11 @@ fn given_search_command_with_prefixes_when_executed_then_performs_search() {
             interpolate: false,
             shell_stubs: false,
             stdout: false,
+            embeddable: false,
         }),
     };
 
     // Use a null output stream for testing
-    let _ = StandardStream::stderr(ColorChoice::Never);
 
     // todo: complete the test
     // Act
@@ -183,8 +186,9 @@ fn test_search_command_structure_with_interpolate() {
     let cli = Cli {
         name: None,
         config: None,
+        db: None,
         debug: 0,
-        openai: false,
+
         no_color: false,
         generate_config: false,
         command: Some(Commands::Search {
@@ -201,6 +205,7 @@ fn test_search_command_structure_with_interpolate() {
             tags_any_not_prefix: None,
             order_desc: false,
             order_asc: false,
+            sort_field: None,
             non_interactive: true,
             is_fuzzy: false,
             fzf_style: None,
@@ -209,6 +214,7 @@ fn test_search_command_structure_with_interpolate() {
             interpolate: true, // Test with interpolation enabled
             shell_stubs: false,
             stdout: false,
+            embeddable: false,
         }),
     };
 

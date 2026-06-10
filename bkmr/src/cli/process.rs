@@ -662,6 +662,8 @@ pub fn clone_bookmark(
                 Some(&edited_bookmark.description),
                 Some(&edited_bookmark.tags),
                 false, // Don't fetch metadata since we've already edited it
+                true,  // embeddable by default
+                edited_bookmark.opener.as_deref(),
             ) {
                 Ok(new_bookmark) => {
                     println!(
@@ -789,6 +791,8 @@ fn edit_database_content(
                     Some(&new_bookmark.description),
                     Some(&new_bookmark.tags),
                     false, // Don't fetch metadata since we already have everything
+                    true,  // embeddable by default
+                    new_bookmark.opener.as_deref(),
                 ) {
                     Ok(_) => {
                         eprintln!("  Successfully created new bookmark");
@@ -861,6 +865,7 @@ fn sync_file_to_bookmark(
             "_md_" => Some(SystemTag::Markdown),
             "_env_" => Some(SystemTag::Env),
             "_imported_" => Some(SystemTag::Text),
+            "_mem_" => Some(SystemTag::Memory),
             _ => None,
         };
 
@@ -919,6 +924,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         let bookmark2 = Bookmark {
@@ -937,6 +943,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         let bookmarks = vec![bookmark1, bookmark2];
@@ -980,6 +987,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         let bookmark2 = Bookmark {
@@ -998,6 +1006,7 @@ mod tests {
             file_mtime: None,
             file_hash: None,
             opener: None,
+            accessed_at: None,
         };
 
         let bookmarks = vec![bookmark1, bookmark2];

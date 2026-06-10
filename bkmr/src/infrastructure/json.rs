@@ -26,6 +26,7 @@ pub struct JsonBookmarkView {
     pub access_count: i32,
     pub created_at: Option<String>,
     pub updated_at: String,
+    pub accessed_at: Option<String>,
 }
 
 impl JsonBookmarkView {
@@ -44,6 +45,7 @@ impl JsonBookmarkView {
             access_count: bookmark.access_count,
             created_at: bookmark.created_at.map(|dt| dt.to_rfc3339()),
             updated_at: bookmark.updated_at.to_rfc3339(),
+            accessed_at: bookmark.accessed_at.map(|dt| dt.to_rfc3339()),
         }
     }
 
@@ -129,13 +131,11 @@ where
         let filename = extract_filename(&id);
 
         let tags = Tag::parse_tags(",_imported_,")?;
-        let dummy_embedder = crate::infrastructure::embeddings::DummyEmbedding;
         let bookmark = Bookmark::new(
             &id,             // URL
             &filename,       // Title
             &record.content, // Description
             tags,            // Tags
-            &dummy_embedder, // TODO: check whether the real embedder is required (looks like it from before refactor)
         )?;
 
         bookmarks.push(bookmark);
@@ -218,13 +218,11 @@ mod tests {
         let mut tags = HashSet::new();
         tags.insert(Tag::new("test")?);
 
-        let dummy_embedder = crate::infrastructure::embeddings::DummyEmbedding;
         let bookmark = Bookmark::new(
             "https://example.com",
             "Example",
             "A test bookmark",
             tags,
-            &dummy_embedder,
         )?;
 
         // Convert to JSON views

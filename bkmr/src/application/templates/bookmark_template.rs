@@ -136,6 +136,21 @@ impl BookmarkTemplate {
 
                 return template;
             }
+            SystemTag::Memory => {
+                builder
+                    .url("Enter memory content here")
+                    .title("Memory Title")
+                    .comments("")
+                    .embeddable(true);
+
+                let mut template = builder.build().unwrap();
+
+                if let Ok(tag) = Tag::new(SystemTag::Memory.as_str()) {
+                    template.tags.insert(tag);
+                }
+
+                return template;
+            }
             SystemTag::Uri => {
                 builder
                     .url("https://")
@@ -281,7 +296,8 @@ impl BookmarkTemplate {
             .updated_at(chrono::Utc::now())
             .access_count(original.map_or(0, |b| b.access_count))
             .embeddable(self.embeddable)
-            .opener(self.opener.clone());
+            .opener(self.opener.clone())
+            .accessed_at(original.and_then(|b| b.accessed_at));
 
         // Preserve embedding and content hash if available from original
         if let Some(bookmark) = original {

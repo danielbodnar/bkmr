@@ -287,7 +287,7 @@ where
 #[derive(Debug)]
 pub struct BookmarkQuery {
     pub specification: Option<Box<dyn Specification<Bookmark>>>,
-    pub sort_by_date: Option<SortDirection>,
+    pub sort: Option<SortCriteria>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
 
@@ -305,7 +305,7 @@ impl BookmarkQuery {
     pub fn new() -> Self {
         Self {
             specification: None,
-            sort_by_date: None,
+            sort: None,
             limit: None,
             offset: None,
             text_query: None,
@@ -368,8 +368,8 @@ impl BookmarkQuery {
         self
     }
 
-    pub fn with_sort_by_date(mut self, direction: SortDirection) -> Self {
-        self.sort_by_date = Some(direction);
+    pub fn with_sort(mut self, criteria: SortCriteria) -> Self {
+        self.sort = Some(criteria);
         self
     }
 
@@ -449,16 +449,30 @@ impl BookmarkQuery {
             }
         }
 
-        // Apply sorting if specified
-        if let Some(direction) = &self.sort_by_date {
-            match direction {
-                SortDirection::Ascending => {
+        // Apply sorting: use criteria if specified, otherwise by id ascending
+        if let Some(criteria) = &self.sort {
+            match (criteria.field, criteria.direction) {
+                (SortField::Id, SortDirection::Ascending) => {
+                    filtered.sort_by(|a, b| a.id.unwrap_or(0).cmp(&b.id.unwrap_or(0)));
+                }
+                (SortField::Id, SortDirection::Descending) => {
+                    filtered.sort_by(|a, b| b.id.unwrap_or(0).cmp(&a.id.unwrap_or(0)));
+                }
+                (SortField::Title, SortDirection::Ascending) => {
+                    filtered.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+                }
+                (SortField::Title, SortDirection::Descending) => {
+                    filtered.sort_by(|a, b| b.title.to_lowercase().cmp(&a.title.to_lowercase()));
+                }
+                (SortField::Modified, SortDirection::Ascending) => {
                     filtered.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
                 }
-                SortDirection::Descending => {
+                (SortField::Modified, SortDirection::Descending) => {
                     filtered.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
                 }
             }
+        } else {
+            filtered.sort_by(|a, b| a.id.unwrap_or(0).cmp(&b.id.unwrap_or(0)));
         }
 
         // Apply limit and offset
@@ -491,6 +505,27 @@ pub enum SortDirection {
     Descending,
 }
 
+/// Sort field enum
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortField {
+    Id,
+    Title,
+    Modified,
+}
+
+/// Combines sort field and direction
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SortCriteria {
+    pub field: SortField,
+    pub direction: SortDirection,
+}
+
+impl SortCriteria {
+    pub fn new(field: SortField, direction: SortDirection) -> Self {
+        Self { field, direction }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,7 +549,6 @@ mod tests {
             "Rust Programming",
             "Learn Rust programming",
             tags.clone(),
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -524,7 +558,6 @@ mod tests {
             "Rust",
             "Learn Rust",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -550,7 +583,6 @@ mod tests {
             "Rust",
             "Learn Rust",
             tags.clone(),
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -559,7 +591,6 @@ mod tests {
             "Python",
             "Learn Python",
             tags.clone(),
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -568,7 +599,6 @@ mod tests {
             "JavaScript",
             "Learn JavaScript",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -590,7 +620,6 @@ mod tests {
             "Rust",
             "Learn Rust",
             tags.clone(),
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -599,7 +628,6 @@ mod tests {
             "Python",
             "Learn Python",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -638,7 +666,6 @@ mod tests {
             "Rust Web",
             "Web development with Rust",
             rust_web_tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -650,7 +677,6 @@ mod tests {
             "Web Programming",
             "Web development programming",
             programming_web_tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -662,7 +688,6 @@ mod tests {
             "Rust",
             "Learn Rust",
             rust_tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
@@ -681,18 +706,17 @@ mod tests {
             "Rust Programming",
             "Learn Rust programming",
             tags,
-            &crate::infrastructure::embeddings::DummyEmbedding,
         )
         .unwrap();
 
         // Create query with text search specification
         let query = BookmarkQuery::new()
             .with_specification(TextSearchSpecification::new("rust".to_string()))
-            .with_sort_by_date(SortDirection::Descending)
+            .with_sort(SortCriteria::new(SortField::Modified, SortDirection::Descending))
             .with_limit(Some(10));
 
         assert!(query.matches(&bookmark));
-        assert_eq!(query.sort_by_date, Some(SortDirection::Descending));
+        assert_eq!(query.sort, Some(SortCriteria::new(SortField::Modified, SortDirection::Descending)));
         assert_eq!(query.limit, Some(10));
     }
 
@@ -701,8 +725,6 @@ mod tests {
         let _ = init_test_env();
 
         // Create test bookmarks with various properties
-        let embedder = &crate::infrastructure::embeddings::DummyEmbedding;
-
         // Create some test bookmarks
         let now = chrono::Utc::now();
         let one_day_ago = now - chrono::Duration::days(1);
@@ -717,7 +739,6 @@ mod tests {
             "Rust Programming",
             "Learn Rust programming",
             tags1,
-            embedder,
         )
         .unwrap();
         bookmark1.id = Some(1);
@@ -733,7 +754,6 @@ mod tests {
             "Python Web Development",
             "Learn Python web development",
             tags2,
-            embedder,
         )
         .unwrap();
         bookmark2.id = Some(2);
@@ -748,7 +768,6 @@ mod tests {
             "Java Enterprise",
             "Enterprise Java development",
             tags3,
-            embedder,
         )
         .unwrap();
         bookmark3.id = Some(3);
@@ -824,7 +843,8 @@ mod tests {
         assert!(results6.iter().any(|b| b.id == Some(2)));
 
         // Test 7: Sorting by date (ascending)
-        let query7 = BookmarkQuery::new().with_sort_by_date(SortDirection::Ascending);
+        let query7 = BookmarkQuery::new()
+            .with_sort(SortCriteria::new(SortField::Modified, SortDirection::Ascending));
         let results7 = query7.apply_non_text_filters(&bookmarks);
 
         assert_eq!(results7.len(), 3);
@@ -833,7 +853,8 @@ mod tests {
         assert_eq!(results7[2].id, Some(1)); // Newest last
 
         // Test 8: Sorting by date (descending)
-        let query8 = BookmarkQuery::new().with_sort_by_date(SortDirection::Descending);
+        let query8 = BookmarkQuery::new()
+            .with_sort(SortCriteria::new(SortField::Modified, SortDirection::Descending));
         let results8 = query8.apply_non_text_filters(&bookmarks);
 
         assert_eq!(results8.len(), 3);
@@ -859,7 +880,7 @@ mod tests {
         let combined_query = BookmarkQuery::new()
             .with_tags_all(Some(&all_tags))
             .with_tags_any_not(Some(&any_not_tags))
-            .with_sort_by_date(SortDirection::Descending)
+            .with_sort(SortCriteria::new(SortField::Modified, SortDirection::Descending))
             .with_limit(Some(1));
 
         let combined_results = combined_query.apply_non_text_filters(&bookmarks);
@@ -900,7 +921,7 @@ mod tests {
 
         let query = BookmarkQuery::new()
             .with_tags_all(Some(&tags))
-            .with_sort_by_date(SortDirection::Descending)
+            .with_sort(SortCriteria::new(SortField::Modified, SortDirection::Descending))
             .with_limit(Some(10));
 
         // Apply filters to empty collection
@@ -919,14 +940,12 @@ mod tests {
 
         // Create test bookmarks
         let tags = HashSet::new();
-        let embedder = &crate::infrastructure::embeddings::DummyEmbedding;
 
         let bookmark = Bookmark::new(
             "https://example.com",
             "Test Bookmark",
             "This is a test",
             tags,
-            embedder,
         )
         .unwrap();
 

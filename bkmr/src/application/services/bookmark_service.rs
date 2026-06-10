@@ -2,7 +2,7 @@
 use crate::application::error::ApplicationResult;
 use crate::domain::bookmark::Bookmark;
 use crate::domain::repositories::query::{BookmarkQuery, SortDirection};
-use crate::domain::search::{SemanticSearch, SemanticSearchResult};
+use crate::domain::search::{HybridSearch, HybridSearchResult, SemanticSearch, SemanticSearchResult};
 use crate::domain::tag::Tag;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -10,6 +10,9 @@ use std::fmt::Debug;
 /// Service interface for bookmark-related operations
 pub trait BookmarkService: Send + Sync + Debug {
     /// Add a new bookmark
+    ///
+    /// `opener`: optional custom open command. `Some("")` is treated as `None`
+    /// so callers can pass through CLI-flag values without normalising first.
     fn add_bookmark(
         &self,
         url: &str,
@@ -17,6 +20,8 @@ pub trait BookmarkService: Send + Sync + Debug {
         description: Option<&str>,
         tags: Option<&HashSet<Tag>>,
         fetch_metadata: bool,
+        embeddable: bool,
+        opener: Option<&str>,
     ) -> ApplicationResult<Bookmark>;
 
     /// Delete a bookmark by ID
@@ -59,6 +64,12 @@ pub trait BookmarkService: Send + Sync + Debug {
         search: &SemanticSearch,
     ) -> ApplicationResult<Vec<SemanticSearchResult>>;
 
+    /// Perform hybrid search combining FTS and semantic search with RRF fusion
+    fn hybrid_search(
+        &self,
+        search: &HybridSearch,
+    ) -> ApplicationResult<Vec<HybridSearchResult>>;
+
     /// Get bookmark by URL
     fn get_bookmark_by_url(&self, url: &str) -> ApplicationResult<Option<Bookmark>>;
 
@@ -81,13 +92,15 @@ pub trait BookmarkService: Send + Sync + Debug {
     /// Record that a bookmark was accessed
     fn record_bookmark_access(&self, id: i32) -> ApplicationResult<Bookmark>;
 
-    /// Import bookmarks from a JSON file
-    fn load_json_bookmarks(&self, path: &str, dry_run: bool) -> ApplicationResult<usize>;
+    /// Bulk-create bookmarks from a JSON array file. Stores full content (url, title,
+    /// description, tags). Skips bookmarks whose URL already exists. Does NOT support updates.
+    /// Use case: agent bulk imports, migrations, seeding a database.
+    fn load_json_bookmarks(&self, path: &str, dry_run: bool, embeddable: bool) -> ApplicationResult<usize>;
 
-    /// Load texts from NDJSON file and create embeddings for semantic search
-    fn load_texts(&self, path: &str, dry_run: bool, force: bool) -> ApplicationResult<usize>;
-
-    /// Import files from directories, parsing frontmatter metadata
+    /// Import files from directories with frontmatter metadata. Stores full content AND
+    /// tracks source file (path, mtime, hash) for smart editing and change detection.
+    /// Supports incremental updates and orphan deletion. Use case: indexing script/doc
+    /// directories while keeping files as the source of truth.
     fn import_files(
         &self,
         paths: &[String],
@@ -96,5 +109,6 @@ pub trait BookmarkService: Send + Sync + Debug {
         dry_run: bool,
         verbose: bool,
         base_path_name: Option<&str>,
+        embeddable: bool,
     ) -> ApplicationResult<(usize, usize, usize)>; // Returns (added, updated, deleted)
 }

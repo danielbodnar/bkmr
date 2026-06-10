@@ -53,8 +53,8 @@ init:  ## init
 
 .PHONY: test
 test:  ## tests, single-threaded (all functionality)
-	@rm -f $(app_root)/db/bkmr.db
-	RUST_LOG=skim=info BKMR_DB_URL=../db/bkmr.db pushd $(pkg_src) && cargo test -- --test-threads=1
+	@rm -f $(app_root)/db/bkmr.db $(app_root)/db/bkmr.db-shm $(app_root)/db/bkmr.db-wal
+	pushd $(pkg_src) && RUST_LOG=error BKMR_DB_URL=../db/bkmr.db cargo test -- --test-threads=1 --quiet
 
 .PHONY: test-lsp
 test-lsp: test-lsp-client test-lsp-filtering test-lsp-language  ## test all LSP functionality
@@ -94,11 +94,6 @@ test-edit-bookmark-with-template: init  ## test-edit-bookmark-with-template (fil
 .PHONY: test-url-details
 test-url-details:  ## test-url-details (charm strang verbose output), expect: "Rust Programming Language", "A language empowering everyone to build reliable and efficient software."
 	RUST_LOG=skim=info BKMR_DB_URL=../db/bkmr.db pushd $(pkg_src) && cargo test --package bkmr --test test_lib given_valid_url_when_loading_details_then_returns_correct_metadata -- --exact --nocapture
-
-.PHONY: run-load-texts
-run-load-texts: run-create-db  ## run-load-text
-	pushd $(pkg_src) && BKMR_DB_URL=/tmp/bkmr_test.db cargo run -- -d -d --openai load-texts --dry-run "$(PROJ_DIR)"/bkmr/tests/resources/data.ndjson
-	#pushd $(pkg_src) && BKMR_DB_URL=/tmp/bkmr_test.db cargo run -- -d -d --openai load-texts "$(PROJ_DIR)"/bkmr/tests/resources/data.ndjson
 
 
 .PHONY: run-migrate-db
@@ -143,7 +138,7 @@ BUILDING:  ## ##################################################################
 all: clean build install  ## all
 	:
 
-.PHONY: all-debug
+.PHONY: all-fast
 all-fast: clean build-fast install-debug  ## all-debug: debug build
 	:
 

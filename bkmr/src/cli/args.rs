@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[derive(Parser, Clone)]
 #[command(author, version, about, long_about = None)]
 #[command(arg_required_else_help = true, disable_help_subcommand = true)]
-/// A bookmark manager for the terminal
+/// Knowledge management for humans and agents — bookmarks, snippets, scripts, and semantic search
 pub struct Cli {
     /// Optional name to operate on
     pub name: Option<String>,
@@ -14,12 +14,13 @@ pub struct Cli {
     #[arg(short, long, value_name = "FILE")]
     pub config: Option<PathBuf>,
 
-    /// Turn debugging information on
+    /// Path to database file (overrides BKMR_DB_URL and config.toml)
+    #[arg(long = "db", value_name = "FILE", global = true)]
+    pub db: Option<PathBuf>,
+
+    /// Turn debugging information on (-d=info, -dd=debug, -ddd=trace)
     #[arg(short, long, action = clap::ArgAction::Count)]
     pub debug: u8,
-
-    #[arg(long = "openai", help = "use OpenAI API to embed bookmarks")]
-    pub openai: bool,
 
     #[arg(long = "no-color", help = "Disable colored output")]
     pub no_color: bool,
@@ -36,7 +37,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Clone)]
 pub enum Commands {
-    /// Searches Bookmarks
+    /// Search bookmarks with full-text search and tag filters
     Search {
         /// FTS query (full text search)
         fts_query: Option<String>,
@@ -44,50 +45,53 @@ pub enum Commands {
         #[arg(
             short = 'e',
             long = "exact",
-            help = "match exact, comma separated list"
+            help = "exact tag match (comma-separated)"
         )]
         tags_exact: Option<String>,
 
-        #[arg(long = "exact-prefix", help = "tags to prefix the exact option")]
+        #[arg(long = "exact-prefix", help = "prefix tags combined with --exact")]
         tags_exact_prefix: Option<String>,
 
-        #[arg(short = 't', long = "tags", help = "match all, comma separated list")]
+        #[arg(short = 't', long = "tags", help = "must have ALL these tags (comma-separated)")]
         tags_all: Option<String>,
 
-        #[arg(long = "tags-prefix", help = "tags to prefix the tags option")]
+        #[arg(long = "tags-prefix", help = "prefix tags combined with --tags")]
         tags_all_prefix: Option<String>,
 
         #[arg(
             short = 'T',
             long = "Tags",
-            help = "not match all, comma separated list"
+            help = "exclude if has ALL these tags (comma-separated)"
         )]
         tags_all_not: Option<String>,
 
-        #[arg(long = "Tags-prefix", help = "tags to prefix the Tags option")]
+        #[arg(long = "Tags-prefix", help = "prefix tags combined with --Tags")]
         tags_all_not_prefix: Option<String>,
 
-        #[arg(short = 'n', long = "ntags", help = "match any, comma separated list")]
+        #[arg(short = 'n', long = "ntags", help = "must have ANY of these tags (comma-separated)")]
         tags_any: Option<String>,
 
-        #[arg(long = "ntags-prefix", help = "tags to prefix the ntags option")]
+        #[arg(long = "ntags-prefix", help = "prefix tags combined with --ntags")]
         tags_any_prefix: Option<String>,
 
         #[arg(
             short = 'N',
             long = "Ntags",
-            help = "not match any, comma separated list"
+            help = "exclude if has ANY of these tags (comma-separated)"
         )]
         tags_any_not: Option<String>,
 
-        #[arg(long = "Ntags-prefix", help = "tags to prefix the Ntags option")]
+        #[arg(long = "Ntags-prefix", help = "prefix tags combined with --Ntags")]
         tags_any_not_prefix: Option<String>,
 
-        #[arg(short = 'o', long = "descending", help = "order by age, descending")]
+        #[arg(short = 'o', long = "descending", help = "sort descending (implies --sort modified if no --sort given)")]
         order_desc: bool,
 
-        #[arg(short = 'O', long = "ascending", help = "order by age, ascending")]
+        #[arg(short = 'O', long = "ascending", help = "sort ascending (implies --sort modified if no --sort given)")]
         order_asc: bool,
+
+        #[arg(long = "sort", help = "sort field: id, title, modified (default: id). Without -o/-O, id/title default ascending, modified defaults descending")]
+        sort_field: Option<String>,
 
         #[arg(long = "np", help = "no prompt")]
         non_interactive: bool,
@@ -128,10 +132,52 @@ pub enum Commands {
             help = "output selected bookmark content to stdout instead of executing (for shell wrapper integration)"
         )]
         stdout: bool,
+
+        #[arg(long = "embeddable", help = "filter to show only embeddable bookmarks")]
+        embeddable: bool,
     },
-    /// Semantic Search with OpenAI
+    /// Hybrid search combining full-text and semantic search with RRF fusion
+    #[command(name = "hsearch")]
+    HSearch {
+        /// Search query text
+        query: String,
+
+        #[arg(short = 't', long = "tags", help = "must have ALL these tags (comma-separated)")]
+        tags_all: Option<String>,
+
+        #[arg(short = 'T', long = "Tags", help = "exclude if has ALL these tags (comma-separated)")]
+        tags_all_not: Option<String>,
+
+        #[arg(short = 'n', long = "ntags", help = "must have ANY of these tags (comma-separated)")]
+        tags_any: Option<String>,
+
+        #[arg(short = 'N', long = "Ntags", help = "exclude if has ANY of these tags (comma-separated)")]
+        tags_any_not: Option<String>,
+
+        #[arg(short = 'e', long = "exact", help = "exact tag match (comma-separated)")]
+        tags_exact: Option<String>,
+
+        #[arg(long = "mode", default_value = "hybrid", help = "search mode: hybrid or exact")]
+        mode: String,
+
+        #[arg(short = 'l', long = "limit", help = "limit number of results")]
+        limit: Option<i32>,
+
+        #[arg(long = "json", help = "output as JSON (includes rrf_score)")]
+        is_json: bool,
+
+        #[arg(long = "fzf", help = "use fzf for interactive selection")]
+        is_fuzzy: bool,
+
+        #[arg(long = "stdout", help = "output to stdout for piping")]
+        stdout: bool,
+
+        #[arg(long = "np", help = "no prompt")]
+        non_interactive: bool,
+    },
+    /// Semantic search using embeddings only
     SemSearch {
-        /// Input for similarity search (search terms)
+        /// Search query (natural language)
         query: String,
 
         #[arg(short = 'l', long = "limit", help = "limit number of results")]
@@ -140,9 +186,9 @@ pub enum Commands {
         #[arg(long = "np", help = "no prompt")]
         non_interactive: bool,
     },
-    /// Open/launch bookmarks or view files
+    /// Open bookmark (smart action based on content type)
     Open {
-        /// list of ids, separated by comma, no blanks OR file path when used with --file
+        /// Bookmark IDs (comma-separated) or file path with --file
         ids: String,
         #[arg(long = "no-edit", help = "skip interactive editing for shell scripts")]
         no_edit: bool,
@@ -165,12 +211,13 @@ pub enum Commands {
     },
     /// Add a bookmark
     Add {
+        /// URL or content to store
         url: Option<String>,
-        /// list of tags, separated by comma, no blanks in between
+        /// Tags (comma-separated, no spaces)
         tags: Option<String>,
-        #[arg(long = "title", help = "title")]
+        #[arg(long = "title", help = "bookmark title")]
         title: Option<String>,
-        #[arg(short = 'd', long = "description", help = "title")]
+        #[arg(short = 'd', long = "description", help = "bookmark description")]
         desc: Option<String>,
         #[arg(long = "no-web", help = "do not fetch URL data")]
         no_web: bool,
@@ -192,15 +239,17 @@ pub enum Commands {
             help = "custom command to open this bookmark (replaces default open behavior)"
         )]
         open_with: Option<String>,
+        #[arg(long = "no-embed", help = "do not generate embedding for semantic search")]
+        no_embed: bool,
     },
-    /// Delete bookmarks
+    /// Delete bookmarks by ID
     Delete {
-        /// list of ids, separated by comma, no blanks
+        /// Bookmark IDs (comma-separated)
         ids: String,
     },
-    /// Update bookmarks
+    /// Update bookmark fields non-interactively (tags, title, description, URL, opener)
     Update {
-        /// list of ids, separated by comma, no blanks
+        /// Bookmark IDs (comma-separated)
         ids: String,
         #[arg(short = 't', long = "tags", help = "add tags to taglist")]
         tags: Option<String>,
@@ -208,15 +257,25 @@ pub enum Commands {
         tags_not: Option<String>,
         #[arg(short = 'f', long = "force", help = "overwrite taglist with tags")]
         force: bool,
+        #[arg(long = "title", help = "set bookmark title")]
+        title: Option<String>,
+        #[arg(short = 'd', long = "description", help = "set bookmark description")]
+        description: Option<String>,
+        #[arg(long = "url", help = "set bookmark URL/content")]
+        url: Option<String>,
         #[arg(
             long = "open-with",
             help = "set custom command to open this bookmark (use empty string to clear)"
         )]
         open_with: Option<String>,
+        #[arg(long = "embed", help = "enable embedding for semantic search")]
+        embed: bool,
+        #[arg(long = "no-embed", help = "disable embedding for semantic search")]
+        no_embed: bool,
     },
-    /// Edit bookmarks
+    /// Edit bookmarks interactively in $EDITOR (smart: opens source file for imports)
     Edit {
-        /// Edit bookmarks, list of ids, separated by comma, no blanks
+        /// Bookmark IDs (comma-separated)
         ids: String,
         #[arg(
             long = "force-db",
@@ -224,20 +283,21 @@ pub enum Commands {
         )]
         force_db: bool,
     },
-    /// Show Bookmarks (list of ids, separated by comma, no blanks)
+    /// Show bookmark details
     Show {
+        /// Bookmark IDs (comma-separated)
         ids: String,
-        #[arg(long = "json", help = "output as json")]
+        #[arg(long = "json", help = "output as JSON")]
         is_json: bool,
     },
-    /// Opens n random URLs
+    /// Open random bookmarks for serendipitous discovery
     Surprise {
         #[arg(short = 'n', help = "number of URLs to open", default_value_t = 1)]
         n: i32,
     },
-    /// Tag for which related tags should be shown. No input: all tags are printed
+    /// List all tags (or show related tags for a given tag)
     Tags {
-        /// Tag for which related tags should be shown. No input: all tags are shown
+        /// Show tags related to this tag (omit to list all)
         tag: Option<String>,
     },
     /// Initialize bookmark database
@@ -249,19 +309,7 @@ pub enum Commands {
         #[arg(long, help = "Pre-fill the database with demo entries")]
         pre_fill: bool,
     },
-    /// Set whether a bookmark can be embedded (used for semantic search)
-    SetEmbeddable {
-        /// ID of the bookmark
-        id: i32,
-
-        #[arg(long = "enable", help = "Enable embedding for this bookmark")]
-        enable: bool,
-
-        #[arg(long = "disable", help = "Disable embedding for this bookmark")]
-        disable: bool,
-    },
-    /// Backfill embeddings for bookmarks, which have been added without embeddings.
-    /// E.g. when OpenAI API was not available.
+    /// Generate missing embeddings for embeddable bookmarks
     Backfill {
         #[arg(short = 'd', long = "dry-run", help = "only show what would be done")]
         dry_run: bool,
@@ -273,35 +321,22 @@ pub enum Commands {
         )]
         force: bool,
     },
-    /// Load bookmarks from JSON array file
+    /// Clear all embeddings and content hashes (clean slate for backfill)
+    ClearEmbeddings {},
+
+    /// Bulk-create bookmarks from JSON array (skips existing Content/URLs, no update support)
     LoadJson {
-        /// Path to the JSON file containing an array of bookmark objects
+        /// Path to JSON file: [{url, title, description, tags}, ...]
         #[arg(help = "Path to JSON file with an array of bookmark objects")]
         path: String,
 
         #[arg(short = 'd', long = "dry-run", help = "only show what would be done")]
         dry_run: bool,
+        #[arg(long = "no-embed", help = "do not generate embedding for semantic search")]
+        no_embed: bool,
     },
 
-    /// Load texts for semantic similarity search as bookmarks.
-    /// The actual content of the file is not stored in the database, only the embeddings.
-    LoadTexts {
-        #[arg(short = 'd', long = "dry-run", help = "only show what would be done")]
-        dry_run: bool,
-
-        #[arg(
-            short = 'f',
-            long = "force",
-            help = "force update embeddings even if content has not changed"
-        )]
-        force: bool,
-
-        /// Path to NDJSON file containing text documents (one per line)
-        #[arg(help = "Path to NDJSON file with text documents (one JSON object per line)")]
-        path: String,
-    },
-
-    /// Import files from directories, parsing frontmatter metadata.
+    /// Import files from directories (stores content, tracks source file for smart editing).
     ///
     /// Supported file types: .sh (shell scripts), .py (python scripts), .md (markdown files)
     ///
@@ -354,6 +389,8 @@ pub enum Commands {
             help = "Base path variable name from config (e.g., SCRIPTS_HOME). Paths must be relative to the base path location."
         )]
         base_path: Option<String>,
+        #[arg(long = "no-embed", help = "do not generate embedding for semantic search")]
+        no_embed: bool,
     },
 
     /// Show program information and configuration details
@@ -366,7 +403,7 @@ pub enum Commands {
         /// Shell to generate completions for (bash, zsh, fish)
         shell: String,
     },
-    /// Start LSP (Language Server Protocol) server for snippet completion
+    /// Start LSP server for editor snippet completion (VS Code, Neovim, IntelliJ)
     Lsp {
         /// Disable bkmr template interpolation (serve raw templates instead of processed content)
         #[arg(long, help = "Disable bkmr template interpolation")]

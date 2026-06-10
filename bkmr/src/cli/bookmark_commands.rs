@@ -34,8 +34,7 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::{fs, io};
-use termcolor::StandardStream;
-use tracing::{instrument, warn};
+use tracing::{info, instrument, warn};
 
 // Helper function to get and validate IDs
 fn get_ids(ids: String) -> CliResult<Vec<i32>> {
@@ -54,28 +53,28 @@ pub fn format_action_description(base_description: &str, opener: Option<&String>
     }
 }
 
-#[instrument(skip(stderr, cli, services))]
+#[instrument(skip(cli, services))]
 pub fn semantic_search(
-    mut stderr: StandardStream,
     cli: Cli,
     services: &ServiceContainer,
 ) -> CliResult<()> {
+    let mut stderr = std::io::stderr();
     if let Commands::SemSearch {
         query,
         limit,
         non_interactive,
     } = cli.command.unwrap()
     {
-        // Check if embedder is DummyEmbedding and provide helpful error message
-        if services.embedder.as_any().type_id() == std::any::TypeId::of::<DummyEmbedding>() {
+        // Check if real embeddings are available (DummyEmbedding has dimensions == 0)
+        if services.embedder.dimensions() == 0 {
             writeln!(
                 stderr,
                 "{}",
-                "Error: Semantic search requires embeddings. Use --openai flag.".red()
+                "Error: Semantic search requires embeddings. Configure an embedding provider.".red()
             )
-            .cli_context("writing DummyEmbedding error message to stderr")?;
+            .cli_context("writing no-embedder error message to stderr")?;
             return Err(CliError::CommandFailed(
-                "No embeddings available - use --openai flag".to_string(),
+                "No embeddings available - configure an embedding provider".to_string(),
             ));
         }
 
@@ -267,6 +266,7 @@ fn handle_file_viewing(file_path: &str) -> CliResult<()> {
         file_mtime: None,
         file_hash: None,
         opener: None,
+        accessed_at: None,
     };
 
     // Execute the markdown action - it will handle file reading and rendering
@@ -286,6 +286,7 @@ fn process_content_for_type(content: &str, system_tag: SystemTag) -> String {
             | SystemTag::Text
             | SystemTag::Shell
             | SystemTag::Env
+            | SystemTag::Memory
     ) {
         content.replace("\\n", "\n")
     } else {
@@ -310,6 +311,7 @@ pub fn add(
         clone_id,
         stdin,
         open_with,
+        no_embed,
     } = cli.command.unwrap()
     {
         // Convert bookmark_type string to SystemTag
@@ -319,6 +321,7 @@ pub fn add(
             "shell" => SystemTag::Shell,
             "md" | "markdown" => SystemTag::Markdown,
             "env" => SystemTag::Env,
+            "mem" | "memory" => SystemTag::Memory,
             _ => SystemTag::Uri, // Default to Uri for anything else
         };
 
@@ -384,23 +387,15 @@ pub fn add(
             let url_value = final_url.unwrap();
             let processed_content = process_content_for_type(&url_value, system_tag);
 
-            let mut bookmark = bookmark_service.add_bookmark(
+            let bookmark = bookmark_service.add_bookmark(
                 &processed_content,
                 title.as_deref(),
                 desc.as_deref(),
                 Some(&tag_set),
                 !no_web,
+                !no_embed,
+                open_with.as_deref(),
             )?;
-
-            // Set custom opener if provided
-            if let Some(opener) = open_with {
-                bookmark.opener = if opener.is_empty() {
-                    None
-                } else {
-                    Some(opener)
-                };
-                bookmark_service.update_bookmark(bookmark.clone(), false)?;
-            }
 
             eprintln!(
                 "Added bookmark: {} (ID: {})",
@@ -424,6 +419,12 @@ pub fn add(
                     return Ok(());
                 }
 
+                // CLI flag overrides whatever was set in the edit template;
+                // otherwise fall back to the OPENER section parsed from the template
+                let effective_opener = open_with
+                    .as_deref()
+                    .or(edited_bookmark.opener.as_deref());
+
                 // Add the edited bookmark
                 match bookmark_service.add_bookmark(
                     &edited_bookmark.url,
@@ -431,19 +432,10 @@ pub fn add(
                     Some(&edited_bookmark.description),
                     Some(&edited_bookmark.tags),
                     false, // Don't fetch metadata since we've already edited it
+                    !no_embed,
+                    effective_opener,
                 ) {
-                    Ok(mut bookmark) => {
-                        // Set custom opener if provided via CLI flag
-                        // Note: opener can also be set via the edit template
-                        if let Some(opener) = &open_with {
-                            bookmark.opener = if opener.is_empty() {
-                                None
-                            } else {
-                                Some(opener.clone())
-                            };
-                            bookmark_service.update_bookmark(bookmark.clone(), false)?;
-                        }
-
+                    Ok(bookmark) => {
                         eprintln!(
                             "Added bookmark: {} (ID: {})",
                             bookmark.title,
@@ -506,14 +498,35 @@ pub fn update(
         tags,
         tags_not,
         force,
+        title,
+        description,
+        url,
         open_with,
+        embed,
+        no_embed,
     } = cli.command.unwrap()
     {
         let id_list = get_ids(ids)?;
 
+        if embed && no_embed {
+            return Err(CliError::InvalidInput(
+                "Cannot specify both --embed and --no-embed".to_string(),
+            ));
+        }
+
         for id in id_list {
             if let Some(bookmark) = bookmark_service.get_bookmark(id)? {
                 eprintln!("Updating: {} ({})", bookmark.title, bookmark.url);
+
+                // Handle embedding flag changes
+                if embed || no_embed {
+                    let updated = bookmark_service.set_bookmark_embeddable(id, embed)?;
+                    eprintln!(
+                        "Embedding {}: {}",
+                        if embed { "enabled" } else { "disabled" },
+                        updated.title
+                    );
+                }
 
                 if force && tags.is_some() {
                     // Replace all tags
@@ -543,21 +556,37 @@ pub fn update(
                     }
                 }
 
-                // Update custom opener if provided
-                if let Some(opener) = &open_with {
-                    // Fetch latest version to avoid stale data
+                // Update scalar fields if provided (title, description, url, opener)
+                let has_field_updates =
+                    title.is_some() || description.is_some() || url.is_some() || open_with.is_some();
+                if has_field_updates {
+                    // Fetch latest version to avoid stale data after tag operations
                     if let Some(mut latest_bookmark) = bookmark_service.get_bookmark(id)? {
-                        latest_bookmark.opener = if opener.is_empty() {
-                            None
-                        } else {
-                            Some(opener.clone())
-                        };
-                        bookmark_service.update_bookmark(latest_bookmark, false)?;
-                        if opener.is_empty() {
-                            eprintln!("Custom opener cleared");
-                        } else {
-                            eprintln!("Custom opener set to: {}", opener);
+                        if let Some(ref t) = title {
+                            latest_bookmark.title = t.clone();
+                            eprintln!("Title set to: {}", t);
                         }
+                        if let Some(ref d) = description {
+                            latest_bookmark.description = d.clone();
+                            eprintln!("Description set to: {}", d);
+                        }
+                        if let Some(ref u) = url {
+                            latest_bookmark.url = u.clone();
+                            eprintln!("URL set to: {}", u);
+                        }
+                        if let Some(ref opener) = open_with {
+                            latest_bookmark.opener = if opener.is_empty() {
+                                None
+                            } else {
+                                Some(opener.clone())
+                            };
+                            if opener.is_empty() {
+                                eprintln!("Custom opener cleared");
+                            } else {
+                                eprintln!("Custom opener set to: {}", opener);
+                            }
+                        }
+                        bookmark_service.update_bookmark(latest_bookmark, false)?;
                     }
                 }
             } else {
@@ -785,61 +814,61 @@ pub fn create_db(cli: Cli, services: &ServiceContainer, settings: &Settings) -> 
         // Pre-fill the database with demo entries if requested
         if pre_fill {
             eprintln!("Pre-filling database with demo entries...");
-            let embedder = DummyEmbedding;
-            pre_fill_database(&repository, &embedder)?;
+            pre_fill_database(&repository)?;
             eprintln!("Demo entries added successfully!");
         }
     }
     Ok(())
 }
 
-#[instrument(skip(cli))]
-pub fn set_embeddable(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
-    if let Commands::SetEmbeddable {
-        id,
-        enable,
-        disable,
-    } = cli.command.unwrap()
-    {
-        let bookmark_service = services.bookmark_service.clone();
-
-        // Ensure that exactly one flag is provided
-        if enable == disable {
-            return Err(CliError::InvalidInput(
-                "Exactly one of --enable or --disable must be specified".to_string(),
-            ));
-        }
-
-        // Set the embeddable flag
-        let embeddable = enable;
-        match bookmark_service.set_bookmark_embeddable(id, embeddable) {
-            Ok(bookmark) => {
-                eprintln!(
-                    "Bookmark '{}' (ID: {}) is now {} for embedding",
-                    bookmark.title,
-                    bookmark.id.unwrap_or(0),
-                    if embeddable { "enabled" } else { "disabled" }
-                );
-                Ok(())
-            }
-            Err(e) => Err(CliError::from(e)),
-        }
-    } else {
-        Err(CliError::Other("Invalid command".to_string()))
-    }
+/// Clear all embeddings from vec_bookmarks and reset all content hashes.
+/// Shared by `clear-embeddings` and `backfill --force`.
+fn purge_all_embeddings(services: &ServiceContainer) -> CliResult<()> {
+    services.vector_repository.clear_all()?;
+    services.bookmark_repository.clear_all_content_hashes()?;
+    Ok(())
 }
 
-#[instrument(skip(cli), level = "debug")]
+pub fn clear_embeddings(_cli: Cli, services: &ServiceContainer) -> CliResult<()> {
+    let has = services.vector_repository.has_embeddings()?;
+    if !has {
+        eprintln!("No embeddings found — nothing to clear.");
+        return Ok(());
+    }
+
+    eprint!("This will delete ALL embeddings and content hashes. Continue? [y/N] ");
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| CliError::CommandFailed(format!("Failed to read input: {}", e)))?;
+    if !input.trim().eq_ignore_ascii_case("y") {
+        eprintln!("Aborted.");
+        return Ok(());
+    }
+
+    purge_all_embeddings(services)?;
+    info!("All embeddings and content hashes cleared");
+    eprintln!("Cleared all embeddings and content hashes.");
+    Ok(())
+}
+
+#[instrument(skip(cli, services), level = "debug")]
 pub fn backfill(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
     if let Commands::Backfill { dry_run, force } = cli.command.unwrap() {
-        // Check embedder type using services instead of global state
-        if services.embedder.as_any().type_id() == std::any::TypeId::of::<DummyEmbedding>() {
-            eprintln!("{}", "Error: Cannot backfill embeddings with DummyEmbedding active. Please use --openai flag.".red());
+        // Check if real embeddings are available
+        if services.embedder.dimensions() == 0 {
+            eprintln!("{}", "Error: Cannot backfill embeddings without an embedding provider configured.".red());
             return Err(CliError::CommandFailed(
-                "DummyEmbedding active - embeddings not available".to_string(),
+                "No embedding provider configured - embeddings not available".to_string(),
             ));
         }
         let bookmark_service = services.bookmark_service.clone();
+
+        // For force mode, clear all existing embeddings and content hashes first
+        if force {
+            eprintln!("Force mode: clearing all existing embeddings and content hashes...");
+            purge_all_embeddings(services)?;
+        }
 
         // Get bookmarks to process based on force flag
         let bookmarks = if force {
@@ -879,6 +908,7 @@ pub fn backfill(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
                     }
                 }
             }
+            info!(count = bookmarks.len(), force = force, "Backfill complete");
             eprintln!(
                 "Completed embedding backfill for {} bookmarks",
                 bookmarks.len()
@@ -890,13 +920,13 @@ pub fn backfill(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
 
 #[instrument(skip(cli))]
 pub fn load_json(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
-    if let Commands::LoadJson { path, dry_run } = cli.command.unwrap() {
+    if let Commands::LoadJson { path, dry_run, no_embed } = cli.command.unwrap() {
         eprintln!("Loading bookmarks from JSON array: {}", path);
 
         let bookmark_service = services.bookmark_service.clone();
 
         if dry_run {
-            let count = bookmark_service.load_json_bookmarks(&path, true)?;
+            let count = bookmark_service.load_json_bookmarks(&path, true, !no_embed)?;
             eprintln!(
                 "Dry run completed - would process {} bookmark entries",
                 count
@@ -905,49 +935,12 @@ pub fn load_json(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
         }
 
         // Process the bookmarks
-        let processed_count = bookmark_service.load_json_bookmarks(&path, false)?;
+        let processed_count = bookmark_service.load_json_bookmarks(&path, false, !no_embed)?;
+        info!(count = processed_count, path = %path, "JSON load complete");
         eprintln!(
             "Successfully processed {} bookmark entries",
             processed_count
         );
-    }
-    Ok(())
-}
-
-#[instrument(skip(cli), level = "debug")]
-pub fn load_texts(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
-    if let Commands::LoadTexts {
-        dry_run,
-        force,
-        path,
-    } = cli.command.unwrap()
-    {
-        // Check embedder type using services instead of global state
-        if services.embedder.as_any().type_id() == std::any::TypeId::of::<DummyEmbedding>() {
-            eprintln!(
-                "{}",
-                "Error: Cannot load texts with DummyEmbedding active. Please use --openai flag."
-                    .red()
-            );
-            return Err(CliError::CommandFailed(
-                "DummyEmbedding active - embeddings not available".to_string(),
-            ));
-        }
-
-        eprintln!("Loading text documents from NDJSON file: {}", path);
-        eprintln!("(Expecting one JSON document per line)");
-
-        let bookmark_service = services.bookmark_service.clone();
-
-        if dry_run {
-            let count = bookmark_service.load_texts(&path, true, force)?;
-            eprintln!("Dry run completed - would process {} text entries", count);
-            return Ok(());
-        }
-
-        // Process the texts
-        let processed_count = bookmark_service.load_texts(&path, false, force)?;
-        eprintln!("Successfully processed {} text entries", processed_count);
     }
     Ok(())
 }
@@ -998,13 +991,15 @@ pub fn info(cli: Cli, services: &ServiceContainer, settings: &Settings) -> CliRe
         // Shell options
         println!("  Shell Interactive: {}", settings.shell_opts.interactive);
 
-        // Embedder type using services
-        let embedder_type =
-            if services.embedder.as_any().type_id() == std::any::TypeId::of::<DummyEmbedding>() {
-                "DummyEmbedding (embeddings disabled)"
-            } else {
-                "OpenAiEmbedding (embeddings enabled)"
-            };
+        // Embedder type using dimensions check
+        let embedder_type = if services.embedder.dimensions() == 0 {
+            "DummyEmbedding (embeddings disabled)".to_string()
+        } else {
+            format!(
+                "Embeddings enabled (dimensions: {})",
+                services.embedder.dimensions()
+            )
+        };
         println!("  Embedder: {}", embedder_type);
 
         // Base paths section
@@ -1029,7 +1024,7 @@ pub fn info(cli: Cli, services: &ServiceContainer, settings: &Settings) -> CliRe
         display_env_var("BKMR_DB_URL", false);
         display_env_var("BKMR_FZF_OPTS", false);
         display_env_var("BKMR_SHELL_INTERACTIVE", false);
-        display_env_var("OPENAI_API_KEY", true); // Mask the actual value
+        display_env_var("FASTEMBED_CACHE_DIR", false);
 
         // Database statistics
         let bookmarks = repository.get_all()?;
@@ -1046,6 +1041,37 @@ pub fn info(cli: Cli, services: &ServiceContainer, settings: &Settings) -> CliRe
         println!("  Top 5 Tags:");
         for (tag, count) in tags.iter().take(5) {
             println!("    {} ({})", tag.value(), count);
+        }
+
+        // Embedding statistics
+        let embeddable_count = bookmarks.iter().filter(|b| b.embeddable).count();
+        let vec_has_embeddings = services.vector_repository.has_embeddings().unwrap_or(false);
+        let vec_dims = services.vector_repository.get_dimensions().unwrap_or(None);
+        let vec_embedded_count = services
+            .vector_repository
+            .get_embedded_ids()
+            .map(|ids| ids.len())
+            .unwrap_or(0);
+
+        println!("\nEmbeddings:");
+        println!("  Model: {} ({} dims)", settings.embeddings.model, services.embedder.dimensions());
+        let cache_dir = crate::infrastructure::embeddings::FastEmbedEmbedding::cache_dir();
+        let cache_path = std::path::Path::new(&cache_dir);
+        let model_downloaded = cache_path.exists()
+            && cache_path.read_dir().map_or(false, |mut d| d.next().is_some());
+        println!(
+            "  Model cache: {} ({})",
+            cache_dir,
+            if model_downloaded { "downloaded" } else { "not downloaded" }
+        );
+        println!(
+            "  Embedded: {} of {} embeddable bookmarks",
+            vec_embedded_count, embeddable_count
+        );
+        if let Some(dims) = vec_dims {
+            println!("  Vector table: vec_bookmarks ({} dims, {} rows)", dims, vec_embedded_count);
+        } else if !vec_has_embeddings {
+            println!("  Vector table: vec_bookmarks (empty)");
         }
 
         // Add system tag statistics
@@ -1141,7 +1167,6 @@ fn display_system_tag_stats(repository: &SqliteBookmarkRepository) -> CliResult<
 /// Pre-fills the database with a variety of demo entries to showcase bkmr's features
 pub fn pre_fill_database(
     repository: &SqliteBookmarkRepository,
-    embedder: &dyn crate::domain::embedding::Embedder,
 ) -> CliResult<()> {
     // Create demo entries
     let demo_entries = vec![
@@ -1305,7 +1330,7 @@ pub fn pre_fill_database(
             }
         }
 
-        match Bookmark::new(url, title, description, tag_set, embedder) {
+        match Bookmark::new(url, title, description, tag_set) {
             Ok(mut bookmark) => {
                 // Set embeddable flag for regular URLs
                 if url.starts_with("http") && !url.contains("{{") {
@@ -1338,6 +1363,7 @@ pub fn import_files(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
         dry_run,
         verbose,
         base_path,
+        no_embed,
     }) = cli.command
     {
         // Validate base path if provided
@@ -1374,6 +1400,7 @@ pub fn import_files(cli: Cli, services: &ServiceContainer) -> CliResult<()> {
             dry_run,
             verbose,
             base_path.as_deref(),
+            !no_embed,
         ) {
             Ok((added, updated, deleted)) => {
                 if dry_run {
@@ -1463,8 +1490,7 @@ mod tests {
         );
 
         // Act - Use DummyEmbedding directly
-        let embedder = DummyEmbedding;
-        pre_fill_database(&repository, &embedder).expect("Failed to pre-fill database");
+        pre_fill_database(&repository).expect("Failed to pre-fill database");
 
         // Assert
         let bookmarks = repository.get_all().expect("Failed to get bookmarks");
